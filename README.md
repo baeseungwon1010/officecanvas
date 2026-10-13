@@ -31,7 +31,27 @@ The `sample` module is a one-screen app: pick a document and its pages appear in
 
 ## Installation
 
-The library is not on Maven Central yet. Build it locally with `./gradlew :officecanvas:publishToMavenLocal` and depend on `io.github.baeseungwon1010:officecanvas:0.1.0` with `mavenLocal()` in your repositories, or include the `officecanvas` module in your build directly.
+Releases are built by [JitPack](https://jitpack.io/#baeseungwon1010/officecanvas). Add its repository in `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
+}
+```
+
+and the dependency in your module:
+
+```kotlin
+dependencies {
+    implementation("com.github.baeseungwon1010:officecanvas:0.1.0")
+}
+```
+
+Any commit hash or `main-SNAPSHOT` works as the version too. To build it yourself instead, run `./gradlew :officecanvas:publishToMavenLocal` and depend on `io.github.baeseungwon1010:officecanvas:0.1.0` from `mavenLocal()`.
 
 Requirements: minSdk 24, Java 17 toolchain. The AAR is about 2.4 MB, most of it bundled fonts (see below).
 
@@ -73,7 +93,7 @@ LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice d
 
 ## 한국어 소개
 
-OfficeCanvas는 PPTX·PPT·HWPX 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 HWPX는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`)와 쪽 나눔을 그대로 사용합니다. 사용법은 위의 `OfficeCanvas.render` 한 줄이면 됩니다. 옛 한글 바이너리 형식(HWP 5.0)은 아직 지원하지 않습니다.
+OfficeCanvas는 PPTX·PPT·HWPX 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 HWPX는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`)와 쪽 나눔을 그대로 사용합니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.1.0`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 옛 한글 바이너리 형식(HWP 5.0)은 아직 지원하지 않습니다.
 
 ## License
 
