@@ -17,7 +17,9 @@ import java.io.File
  * Not a test: renders an arbitrary document to PNGs for tools/compare.sh.
  * Skipped unless -Pofficecanvas.input=<file> is given. Writes ours_N.png (1-based)
  * and, for slide decks, ours_base.tsv (slide, text baseline in pt, line start)
- * into -Pofficecanvas.output (default build/officecanvas-render).
+ * into -Pofficecanvas.output (default build/officecanvas-render). When the input
+ * is a directory, every document in it is rendered into a subdirectory named
+ * after the file.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -30,9 +32,22 @@ class RenderFileTool {
         assumeTrue("set -Pofficecanvas.input=<file> to render a document", input.isNotEmpty())
         val out = File(System.getProperty("officecanvas.output").orEmpty().ifEmpty { "build/officecanvas-render" })
         val longSide = System.getProperty("officecanvas.longSide")?.toIntOrNull() ?: OfficeCanvas.DEFAULT_LONG_SIDE_PX
-        out.mkdirs()
+        val inputFile = File(input)
+        if (inputFile.isDirectory) {
+            inputFile.listFiles().orEmpty().filter { it.isFile && DocumentFormat.detect(it) != null }.sortedBy { it.name }.forEach {
+                try {
+                    renderOne(it, File(out, it.nameWithoutExtension), longSide)
+                } catch (e: Exception) {
+                    println("failed ${it.name}: $e")
+                }
+            }
+        } else {
+            renderOne(inputFile, out, longSide)
+        }
+    }
 
-        val file = File(input)
+    private fun renderOne(file: File, out: File, longSide: Int) {
+        out.mkdirs()
         // Slide width in points, to turn the renderer's pixel baselines into the
         // points compare_baselines.py measures LibreOffice's PDF in.
         val widthPt = when (DocumentFormat.detect(file)) {
