@@ -50,6 +50,8 @@ enum class DocumentFormat {
             if (Ole2Reader.open(file).readStream("PowerPoint Document") != null) PPT else null
         } catch (e: Exception) {
             null
+        } catch (e: OutOfMemoryError) {
+            null
         }
 
         private fun ByteArray.startsWith(prefix: ByteArray) = prefix.indices.all { this[it] == prefix[it] }
