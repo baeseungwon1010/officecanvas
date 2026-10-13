@@ -1,0 +1,15 @@
+OfficeCanvas
+Copyright 2026 Bae Seungwon
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It bundles the Liberation fonts (Liberation Sans, Liberation Serif,
+Liberation Mono), version 2.1.5, in officecanvas/src/main/assets/officecanvas/fonts.
+Digitized data copyright (c) 2010 Google Corporation with Reserved Font
+Arimo, Tinos and Cousine; copyright (c) 2012 Red Hat, Inc. with Reserved Font
+Name Liberation. Licensed under the SIL Open Font License, Version 1.1; the
+full license is in officecanvas/src/main/assets/officecanvas/fonts/LICENSE-Liberation.txt.
+
+The binary PowerPoint and Office drawing formats are implemented from
+Microsoft's published specifications [MS-PPT] and [MS-ODRAW], [MS-EMF] and
+[MS-WMF], which are covered by the Microsoft Open Specifications Promise.
