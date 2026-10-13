@@ -1,6 +1,5 @@
 package io.github.baeseungwon1010.officecanvas.metafile
 
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Matrix
@@ -8,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -78,14 +78,22 @@ internal object EmfRenderer {
         private var path: Path? = null // open path bracket (BEGINPATH..ENDPATH)
         private var bracketPath: Path? = null // closed bracket awaiting FILL/STROKEPATH
 
+        /** End of the record being played: poly records may not read past it. */
+        private var recordEnd = 0
+
+        /** Points left for the whole picture; a picture made of millions of tiny
+         *  poly records stops drawing rather than building a path without end. */
+        private var pointBudget = MAX_POINTS
+
         fun play() {
             var off = 0
             var guard = 1_000_000
-            while (off + 8 <= b.limit() && guard-- > 0) {
+            while (off + 8 <= b.limit() && guard-- > 0 && pointBudget > 0) {
                 val type = b.getInt(off)
                 val size = b.getInt(off + 4)
-                if (size < 8 || off + size > b.limit()) break
+                if (size < 8 || off.toLong() + size > b.limit()) break
                 if (type == EMR_EOF) break
+                recordEnd = off + size
                 try {
                     record(type, off, size)
                 } catch (e: RuntimeException) {
@@ -135,7 +143,7 @@ internal object EmfRenderer {
                     3 -> st.world.postConcat(xform(o + 8))
                     4 -> st.world.set(xform(o + 8))
                 }
-                EMR_SAVEDC -> saved.addLast(st.copy())
+                EMR_SAVEDC -> if (saved.size < MAX_SAVED_STATES) saved.addLast(st.copy())
                 EMR_RESTOREDC -> {
                     var n = -i32(o + 8)
                     while (n-- > 1 && saved.isNotEmpty()) saved.removeLast()
@@ -205,11 +213,15 @@ internal object EmfRenderer {
                 EMR_POLYPOLYGON16, EMR_POLYPOLYLINE16, EMR_POLYPOLYGON, EMR_POLYPOLYLINE -> {
                     val small = type == EMR_POLYPOLYGON16 || type == EMR_POLYPOLYLINE16
                     val closed = type == EMR_POLYPOLYGON16 || type == EMR_POLYPOLYGON
+                    val step = if (small) 4 else 8
                     val n = i32(o + 24)
+                    if (n < 0 || n > (recordEnd - o - 32) / 4) return
                     var p = o + 32 + 4 * n
                     val poly = path ?: Path()
                     for (k in 0 until n) {
                         val count = i32(o + 32 + 4 * k)
+                        if (count < 0 || count > (recordEnd - p) / step || count > pointBudget) return
+                        pointBudget -= count
                         for (j in 0 until count) {
                             val x = if (small) i16(p) else i32(p).toFloat()
                             val y = if (small) i16(p + 2) else i32(p + 4).toFloat()
@@ -261,7 +273,9 @@ internal object EmfRenderer {
 
         /** Points of a poly record: bounds(16), count(4), then 16- or 32-bit pairs. */
         private fun points(o: Int, small: Boolean): FloatArray {
-            val count = i32(o + 24)
+            // The count is trusted only as far as the record holds that many points.
+            val count = i32(o + 24).coerceIn(0, minOf((recordEnd - o - 28) / (if (small) 4 else 8), pointBudget).coerceAtLeast(0))
+            pointBudget -= count
             val out = FloatArray(count * 2)
             var p = o + 28
             for (i in 0 until count) {
@@ -398,21 +412,29 @@ internal object EmfRenderer {
 
         /** An embedded DIB: a BMP file is the DIB with a 14-byte file header in front. */
         private fun bitmap(o: Int, x: Int, y: Int, w: Int, h: Int, offBmi: Int, cbBmi: Int, offBits: Int, cbBits: Int) {
-            if (cbBmi <= 0 || cbBits <= 0) return
+            if (cbBmi <= 0 || cbBits <= 0 || offBmi < 0 || offBits < 0) return
+            // Both parts must lie inside the record that carries them.
+            if (o.toLong() + offBmi + cbBmi > recordEnd || o.toLong() + offBits + cbBits > recordEnd) return
             val bmp = ByteBuffer.allocate(14 + cbBmi + cbBits).order(ByteOrder.LITTLE_ENDIAN)
             bmp.put('B'.code.toByte()).put('M'.code.toByte()).putInt(14 + cbBmi + cbBits).putInt(0).putInt(14 + cbBmi)
             bmp.put(b.array(), o + offBmi, cbBmi).put(b.array(), o + offBits, cbBits)
-            val bitmap = BitmapFactory.decodeByteArray(bmp.array(), 0, bmp.capacity()) ?: return
+            val bitmap = SafeBitmaps.decode(bmp.array()) ?: return
             val corners = floatArrayOf(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat())
             transform().mapPoints(corners)
             val r = RectF(
                 minOf(corners[0], corners[2]), minOf(corners[1], corners[3]),
                 maxOf(corners[0], corners[2]), maxOf(corners[1], corners[3])
             )
-            canvas.drawBitmap(bitmap, null, r, Paint(Paint.FILTER_BITMAP_FLAG))
-            bitmap.recycle()
+            try {
+                canvas.drawBitmap(bitmap, null, r, Paint(Paint.FILTER_BITMAP_FLAG))
+            } finally {
+                bitmap.recycle()
+            }
         }
     }
+
+    private const val MAX_POINTS = 4_000_000
+    private const val MAX_SAVED_STATES = 1024
 
     private const val EMR_HEADER = 1
     private const val EMR_POLYBEZIER = 2

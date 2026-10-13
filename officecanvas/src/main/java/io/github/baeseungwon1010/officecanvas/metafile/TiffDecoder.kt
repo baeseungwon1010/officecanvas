@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.metafile
 
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -16,6 +17,8 @@ internal object TiffDecoder {
     fun toBmp(tiff: ByteArray): ByteArray? = try {
         decode(tiff)
     } catch (e: RuntimeException) {
+        null
+    } catch (e: OutOfMemoryError) {
         null
     }
 
@@ -38,7 +41,9 @@ internal object TiffDecoder {
             val count = b.getInt(e + 4)
             val size = when (type) { 3 -> 2; 4 -> 4; 1, 7 -> 1; else -> 0 }
             if (size == 0 || count <= 0) continue
-            val at = if (size * count <= 4) e + 8 else b.getInt(e + 8)
+            val at = if (size.toLong() * count <= 4) e + 8 else b.getInt(e + 8)
+            // A tag's values must lie inside the file, whatever count it claims.
+            if (at < 0 || at.toLong() + size.toLong() * count > tiff.size) continue
             tags[tag] = IntArray(count) { k ->
                 when (size) {
                     1 -> b.get(at + k).toInt() and 0xFF
@@ -50,7 +55,7 @@ internal object TiffDecoder {
         fun one(tag: Int, default: Int) = tags[tag]?.firstOrNull() ?: default
         val width = one(256, 0)
         val height = one(257, 0)
-        if (width <= 0 || height <= 0 || width.toLong() * height > 40_000_000L) return null
+        if (width <= 0 || height <= 0 || width.toLong() * height > SafeBitmaps.MAX_PIXELS) return null
         val bits = one(258, 1)
         val compression = one(259, 1)
         val photometric = one(262, 1)
@@ -58,6 +63,7 @@ internal object TiffDecoder {
         val rowsPerStrip = one(278, height).coerceAtLeast(1)
         val predictor = one(317, 1)
         if (one(284, 1) != 1 || compression !in listOf(1, 5, 32773) || (bits != 8 && bits != 1)) return null
+        if (spp !in 1..4) return null
         val offsets = tags[273] ?: return null
         val counts = tags[279] ?: return null
 

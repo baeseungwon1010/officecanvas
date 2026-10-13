@@ -1,13 +1,13 @@
 package io.github.baeseungwon1010.officecanvas.metafile
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -50,7 +50,9 @@ internal object WmfRenderer {
                 0x0000 -> break
             }
             if (ext != null && off > 18) break
-            off += (words * 2).toInt().coerceAtMost(wmf.size)
+            // Records must move forward and stay inside the file.
+            if (words * 2 > wmf.size - off) break
+            off += (words * 2).toInt()
         }
         val (w, h) = ext ?: return null
         if (w == 0 || h == 0) return null
@@ -102,7 +104,7 @@ internal object WmfRenderer {
         fun play() {
             var off = 22 + 18 // placeable header + standard WMF header
             var guard = 1_000_000
-            while (off + 6 <= b.limit() && guard-- > 0) {
+            while (off + 6 <= b.limit() && guard-- > 0 && pointBudget > 0) {
                 val words = b.getInt(off)
                 val fn = b.getShort(off + 4).toInt() and 0xFFFF
                 if (words < 3 || off + words * 2L > b.limit()) break
@@ -125,10 +127,17 @@ internal object WmfRenderer {
             return (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
         }
 
+        /** Points left for the whole picture (see EmfRenderer). */
+        private var pointBudget = 4_000_000
+        /** No slot below this is free, so a new object never rescans the table. */
+        private var lowestFree = 0
+
         private fun add(obj: Any) {
-            var i = 0
+            if (objects.size >= 65535) return // WMF object tables hold at most this many
+            var i = lowestFree
             while (objects.containsKey(i)) i++
             objects[i] = obj
+            lowestFree = i + 1
         }
 
         private fun record(fn: Int, p: Int, end: Int) {
@@ -159,7 +168,11 @@ internal object WmfRenderer {
                     is Brush -> brush = o
                     is Font -> font = o
                 }
-                0x01F0 -> objects.remove(u16(p)) // DeleteObject
+                0x01F0 -> { // DeleteObject
+                    val k = u16(p)
+                    objects.remove(k)
+                    if (k < lowestFree) lowestFree = k
+                }
                 0x0214 -> { curY = i16(p); curX = i16(p + 2) } // MoveTo
                 0x0213 -> { // LineTo
                     val y = i16(p); val x = i16(p + 2)
@@ -168,16 +181,17 @@ internal object WmfRenderer {
                     curX = x; curY = y
                 }
                 0x0324, 0x0325 -> { // Polygon, Polyline
-                    val n = u16(p)
+                    val n = minOf(u16(p), (end - p - 2) / 4)
                     val path = polyPath(p + 2, n, close = fn == 0x0324)
                     if (fn == 0x0324) fillAndStroke(path) else stroke(path)
                 }
                 0x0538 -> { // PolyPolygon
-                    val polys = u16(p)
+                    val polys = minOf(u16(p), (end - p - 2) / 2)
                     var ptOff = p + 2 + polys * 2
                     val path = Path()
                     for (i in 0 until polys) {
-                        val n = u16(p + 2 + i * 2)
+                        val n = minOf(u16(p + 2 + i * 2), (end - ptOff) / 4)
+                        if (n <= 0) break
                         path.addPath(polyPath(ptOff, n, close = true))
                         ptOff += n * 4
                     }
@@ -215,7 +229,9 @@ internal object WmfRenderer {
                 if (it.top > it.bottom) { val t = it.top; it.top = it.bottom; it.bottom = t }
             }
 
-        private fun polyPath(p: Int, n: Int, close: Boolean): Path {
+        private fun polyPath(p: Int, n0: Int, close: Boolean): Path {
+            val n = n0.coerceIn(0, pointBudget)
+            pointBudget -= n
             val path = Path()
             for (i in 0 until n) {
                 val x = mapX(i16(p + i * 4)); val y = mapY(i16(p + i * 4 + 2))
@@ -269,10 +285,14 @@ internal object WmfRenderer {
 
         /** [at] is the DIB (BITMAPINFO + bits); destination is in logical units. */
         private fun dib(at: Int, end: Int, h: Float, w: Float, y: Float, x: Float) {
+            if (end <= at) return
             val bmp = decodeDib(ByteArray(end - at) { b.get(at + it) }) ?: return
             val dst = RectF(mapX(x), mapY(y), mapX(x + w), mapY(y + h))
-            canvas.drawBitmap(bmp, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
-            bmp.recycle()
+            try {
+                canvas.drawBitmap(bmp, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
+            } finally {
+                bmp.recycle()
+            }
         }
     }
 
@@ -281,7 +301,7 @@ internal object WmfRenderer {
     /** Decodes a bare DIB (BITMAPINFOHEADER + palette + pixels) by giving it a BMP file header. */
     fun decodeDib(dib: ByteArray): Bitmap? {
         val bmp = dibToBmp(dib) ?: return null
-        return BitmapFactory.decodeByteArray(bmp, 0, bmp.size)
+        return SafeBitmaps.decode(bmp)
     }
 
     /** A bare DIB with a BITMAPFILEHEADER prepended, or null if the header is implausible. */

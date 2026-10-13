@@ -46,7 +46,7 @@ internal object SvgRenderer {
         canvas.translate(tx, ty)
         canvas.scale(s, s)
         try {
-            Player(canvas, rules).element(root, Style())
+            Player(canvas, rules).element(root, Style(), 0)
         } finally {
             canvas.restore()
         }
@@ -65,16 +65,16 @@ internal object SvgRenderer {
 
     private class Player(private val canvas: Canvas, private val rules: Map<String, Map<String, String>>) {
 
-        fun element(e: Element, parent: Style) {
+        fun element(e: Element, parent: Style, depth: Int) {
             val tag = e.tagName.substringAfter(':')
-            if (tag in SKIPPED) return
+            if (tag in SKIPPED || depth > MAX_DEPTH) return
             val style = styleOf(e, parent)
             if (!style.display) return
             val transform = e.getAttribute("transform").takeIf { it.isNotBlank() }?.let { parseTransform(it) }
             if (transform != null) { canvas.save(); canvas.concat(transform) }
             try {
                 when (tag) {
-                    "svg", "g", "a", "switch" -> for (child in e.childElements()) element(child, style)
+                    "svg", "g", "a", "switch" -> for (child in e.childElements()) element(child, style, depth + 1)
                     else -> shape(e, tag)?.let { paint(it, style) }
                 }
             } finally {
@@ -149,6 +149,10 @@ internal object SvgRenderer {
         }
     }
 
+    private const val MAX_DEPTH = 64
+    private const val MAX_STYLE_CHARS = 256 * 1024
+    private const val MAX_TRANSFORM_CHARS = 4096
+
     private val SKIPPED = setOf("defs", "style", "title", "desc", "metadata", "clipPath", "mask", "linearGradient", "radialGradient", "pattern", "symbol", "text", "use", "image", "filter")
     private val PROPERTIES = listOf("fill", "stroke", "stroke-width", "fill-opacity", "stroke-opacity", "opacity", "fill-rule", "display", "visibility")
 
@@ -158,11 +162,30 @@ internal object SvgRenderer {
         return out
     }
 
-    private fun parseCss(css: String, into: MutableMap<String, Map<String, String>>) {
-        val clean = css.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-        for (m in Regex("([^{}]+)\\{([^}]*)\\}").findAll(clean)) {
-            val decl = declarations(m.groupValues[2])
-            for (selector in m.groupValues[1].split(',')) {
+    /** Class rules from a <style> block, scanned by hand: a regex over a long
+     *  block with no braces backtracks quadratically. */
+    private fun parseCss(css0: String, into: MutableMap<String, Map<String, String>>) {
+        if (css0.length > MAX_STYLE_CHARS) return
+        val css = StringBuilder()
+        var i = 0
+        while (i < css0.length) {
+            if (css0.startsWith("/*", i)) {
+                val end = css0.indexOf("*/", i + 2)
+                i = if (end < 0) css0.length else end + 2
+            } else {
+                css.append(css0[i]); i++
+            }
+        }
+        var pos = 0
+        while (pos < css.length) {
+            val open = css.indexOf("{", pos)
+            if (open < 0) break
+            val close = css.indexOf("}", open + 1)
+            if (close < 0) break
+            val selectors = css.substring(pos, open)
+            val decl = declarations(css.substring(open + 1, close))
+            pos = close + 1
+            for (selector in selectors.split(',')) {
                 val sel = selector.trim()
                 if (sel.startsWith('.') && sel.drop(1).all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
                     into[sel.drop(1)] = (into[sel.drop(1)].orEmpty()) + decl
@@ -209,10 +232,18 @@ internal object SvgRenderer {
 
     private fun parseTransform(t: String): Matrix {
         val m = Matrix()
-        for (op in Regex("(\\w+)\\s*\\(([^)]*)\\)").findAll(t)) {
-            val n = op.groupValues[2].numbers()
+        if (t.length > MAX_TRANSFORM_CHARS) return m
+        var pos = 0
+        while (pos < t.length) {
+            val open = t.indexOf('(', pos)
+            if (open < 0) break
+            val close = t.indexOf(')', open + 1)
+            if (close < 0) break
+            val name = t.substring(pos, open).trim().trimStart(',').trim()
+            val n = t.substring(open + 1, close).numbers()
+            pos = close + 1
             val step = Matrix()
-            when (op.groupValues[1]) {
+            when (name) {
                 "matrix" -> if (n.size == 6) step.setValues(floatArrayOf(n[0], n[2], n[4], n[1], n[3], n[5], 0f, 0f, 1f))
                 "translate" -> step.setTranslate(n.getOrElse(0) { 0f }, n.getOrElse(1) { 0f })
                 "scale" -> step.setScale(n.getOrElse(0) { 1f }, n.getOrElse(1) { n.getOrElse(0) { 1f } })
