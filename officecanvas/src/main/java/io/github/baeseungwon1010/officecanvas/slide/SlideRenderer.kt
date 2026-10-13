@@ -531,7 +531,7 @@ internal object SlideRenderer {
             // A loaded bold/italic font file already is the style; StyleSpan is only
             // needed (as synthesized bold/slant) when there is no such file.
             val style = when {
-                face != null -> if (run.italic && kind == OfficeFonts.Kind.MONO) Typeface.ITALIC else null
+                face != null -> if (run.italic && (kind == OfficeFonts.Kind.MONO || kind == OfficeFonts.Kind.CALIBRI)) Typeface.ITALIC else null
                 run.bold && run.italic -> Typeface.BOLD_ITALIC
                 run.bold -> Typeface.BOLD
                 run.italic -> Typeface.ITALIC
