@@ -5,6 +5,7 @@ import io.github.baeseungwon1010.officecanvas.slide.Crop
 import io.github.baeseungwon1010.officecanvas.slide.Deck
 import io.github.baeseungwon1010.officecanvas.slide.Slide
 import io.github.baeseungwon1010.officecanvas.slide.TableCell
+import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import org.w3c.dom.Document
 import org.w3c.dom.Element as DomElement
 import java.io.File
@@ -453,8 +454,7 @@ internal object PptxParser {
             <a:lastRow><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:lastRow>
             <a:firstRow><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:firstRow>
             </a:tblStyle>"""
-        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-        return factory.newDocumentBuilder().parse(xml.byteInputStream()).documentElement
+        return SafeXml.parse(xml.toByteArray())!!.documentElement
     }
 
     private fun boxOf(spPr: DomElement, direct: Boolean = false): Box? {

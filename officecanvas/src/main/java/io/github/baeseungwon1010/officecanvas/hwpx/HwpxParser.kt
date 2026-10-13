@@ -1,11 +1,11 @@
 package io.github.baeseungwon1010.officecanvas.hwpx
 
+import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import org.w3c.dom.Document
 import org.w3c.dom.Element as DomElement
 import org.w3c.dom.Node
 import java.io.File
 import java.util.zip.ZipFile
-import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * Reads a .hwpx into an [HwpxDoc] already split into pages.
@@ -302,28 +302,7 @@ internal object HwpxParser {
 
     // ---- zip / xml helpers -------------------------------------------------
 
-    private fun ZipFile.xml(path: String): Document? {
-        val entry = getEntry(path) ?: return null
-        return getInputStream(entry).use { stream ->
-            try {
-                secureDocumentBuilder().parse(stream)
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-
-    /** XML parsing with every external-resource door shut — see the identical
-     *  rationale in PptxParser.secureDocumentBuilder. */
-    private fun secureDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = true
-        isExpandEntityReferences = false
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-        setXIncludeAware(false)
-    }.newDocumentBuilder()
+    private fun ZipFile.xml(path: String): Document? = SafeXml.parse(this, path)
 
     private fun Node.children(): List<DomElement> {
         val out = mutableListOf<DomElement>()

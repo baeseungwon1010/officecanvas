@@ -4,7 +4,7 @@ import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.util.zip.ZipFile
-import javax.xml.parsers.DocumentBuilderFactory
+import io.github.baeseungwon1010.officecanvas.util.SafeXml
 
 internal const val NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 internal const val NS_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
@@ -14,16 +14,9 @@ internal const val NS_DSP = "http://schemas.microsoft.com/office/drawing/2008/di
 internal const val NS_ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
 internal const val NS_DGM = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
 
-internal fun ZipFile.xml(path: String): Document? {
-    val entry = getEntry(path) ?: return null
-    return getInputStream(entry).use { stream ->
-        try {
-            secureDocumentBuilder().parse(stream)
-        } catch (e: Exception) {
-            null
-        }
-    }
-}
+/** A part of the package as a DOM, or null when it is missing, too large, carries a
+ *  DOCTYPE or doesn't parse (see [SafeXml]). */
+internal fun ZipFile.xml(path: String): Document? = SafeXml.parse(this, path)
 
 /**
  * Relationship files map the r:id used inside a part to the file it points at.
@@ -45,21 +38,6 @@ internal fun ZipFile.rels(partPath: String): Map<String, String> {
             id to resolvePath(dir, target)
         }.toMap()
 }
-
-/**
- * XML parsing with every external-resource door shut. A .pptx is frequently a file
- * someone else sent, and an entity reference is enough to turn parsing it into a
- * file read or an outbound request.
- */
-private fun secureDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-    isNamespaceAware = true
-    isExpandEntityReferences = false
-    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-    setFeature("http://xml.org/sax/features/external-general-entities", false)
-    setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-    setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-    setXIncludeAware(false)
-}.newDocumentBuilder()
 
 /** Resolves a relationship target, which may be relative ("../media/x.png"). */
 internal fun resolvePath(baseDir: String, target: String): String {

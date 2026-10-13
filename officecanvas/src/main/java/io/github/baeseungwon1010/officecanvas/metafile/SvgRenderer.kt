@@ -7,7 +7,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import org.w3c.dom.Element
 import org.w3c.dom.Node
-import javax.xml.parsers.DocumentBuilderFactory
+import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -26,17 +26,7 @@ import kotlin.math.tan
 internal object SvgRenderer {
 
     fun draw(canvas: Canvas, svg: ByteArray, dst: RectF) {
-        val root = try {
-            DocumentBuilderFactory.newInstance().apply {
-                isNamespaceAware = false
-                isExpandEntityReferences = false
-                setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-                setFeature("http://xml.org/sax/features/external-general-entities", false)
-                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            }.newDocumentBuilder().parse(svg.inputStream()).documentElement
-        } catch (e: Exception) {
-            return
-        }
+        val root = SafeXml.parse(svg, namespaceAware = false)?.documentElement ?: return
         if (root.tagName.substringAfter(':') != "svg") return
 
         val viewBox = root.getAttribute("viewBox").numbers().takeIf { it.size == 4 && it[2] > 0 && it[3] > 0 }
