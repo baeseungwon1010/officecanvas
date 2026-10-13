@@ -1,0 +1,165 @@
+package io.github.baeseungwon1010.officecanvas.slide
+
+/**
+ * A parsed .pptx, in the only terms the renderer needs: absolutely positioned boxes.
+ *
+ * PowerPoint stores every shape's position and size in the file itself, so unlike a
+ * word processor document there is no layout to compute — no line boxes to stack, no
+ * page breaks to find. That is what makes rendering slides on-device tractable at all,
+ * and it is why this model is flat: parsing resolves inheritance and grouping, and the
+ * renderer only has to draw what it is handed.
+ *
+ * All geometry is in EMU (English Metric Units), the unit the format uses:
+ * 914400 per inch, 12700 per point.
+ */
+
+internal const val EMU_PER_INCH = 914400.0
+internal const val EMU_PER_POINT = 12700.0
+
+internal data class Deck(
+    val widthEmu: Long,
+    val heightEmu: Long,
+    val slides: List<Slide>
+) {
+    val aspect: Double get() = widthEmu.toDouble() / heightEmu.toDouble()
+}
+
+internal data class Slide(
+    /** Solid background colour as 0xAARRGGBB, or null to leave the page white. */
+    val backgroundArgb: Int?,
+    val elements: List<Element>
+)
+
+internal data class Box(val x: Long, val y: Long, val w: Long, val h: Long)
+
+internal sealed class Element {
+    abstract val box: Box
+
+    data class Shape(
+        override val box: Box,
+        /** Preset geometry name ("rect", "ellipse", "roundRect", ...); null for a plain text box. */
+        val geometry: String?,
+        val fillArgb: Int?,
+        val strokeArgb: Int?,
+        val strokeWidthEmu: Long,
+        val text: TextBody?,
+        val rotation: Float = 0f,
+        val flipH: Boolean = false,
+        val flipV: Boolean = false,
+        /** Arrowheads at the line's start/end ("line" geometry only). */
+        val headArrow: Boolean = false,
+        val tailArrow: Boolean = false,
+        val dashed: Boolean = false,
+        /** Exact outline in the box's own 0..1 space (freeforms and non-rectangular
+         *  presets); when set it replaces [geometry] for fill and stroke. */
+        val outline: List<PathOp>? = null,
+        /** Replaces [fillArgb] when set. */
+        val gradient: Gradient? = null
+    ) : Element()
+
+    data class Picture(
+        override val box: Box,
+        /** Entry name inside the .pptx zip, e.g. "ppt/media/image3.png". Null when
+         *  the source isn't a zip at all and [imageBytes] is used instead — a
+         *  legacy .ppt stores images in a separate OLE2 stream, not zip entries
+         *  (see ppt/PptParser). Exactly one of the two is set. */
+        val imageEntry: String? = null,
+        /** Already-decodable image bytes (JPEG/PNG), used instead of [imageEntry]
+         *  when there is no zip to look an entry up in. */
+        val imageBytes: ByteArray? = null,
+        val rotation: Float = 0f,
+        /** An EMF vector picture (BitmapFactory can't decode those); drawn by
+         *  metafile/EmfRenderer instead of [imageBytes]. */
+        val emfBytes: ByteArray? = null,
+        /** A placeable WMF vector picture; drawn by metafile/WmfRenderer. */
+        val wmfBytes: ByteArray? = null,
+        /** Fractions of the source image trimmed from each edge (negative = padding). */
+        val crop: Crop? = null
+    ) : Element()
+
+    data class Table(
+        override val box: Box,
+        val columnWidthsEmu: List<Long>,
+        val rowHeightsEmu: List<Long>,
+        /** Row-major; a cell spanned by a merge is null. */
+        val cells: List<List<TableCell?>>
+    ) : Element()
+}
+
+internal sealed class PathOp {
+    data class MoveTo(val x: Float, val y: Float) : PathOp()
+    data class LineTo(val x: Float, val y: Float) : PathOp()
+    data class CubicTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val x: Float, val y: Float) : PathOp()
+    object Close : PathOp()
+}
+
+/** A linear gradient: [colors] at [positions] (0..1), running at [angleDeg]
+ *  (0 = left to right, 90 = top to bottom). [radial] instead spreads it out from
+ *  ([centerX], [centerY]) in the box's 0..1 space — as concentric rectangles when
+ *  [rectangular] (PowerPoint's "from center"/"shape" shading on a box), else circles. */
+internal data class Gradient(
+    val colors: List<Int>,
+    val positions: List<Float>,
+    val angleDeg: Float,
+    val radial: Boolean = false,
+    val rectangular: Boolean = false,
+    val centerX: Float = 0.5f,
+    val centerY: Float = 0.5f
+)
+
+internal data class Crop(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+internal data class TableCell(val text: TextBody?, val fillArgb: Int?, val colSpan: Int = 1, val rowSpan: Int = 1)
+
+internal enum class VAnchor { TOP, MIDDLE, BOTTOM }
+internal enum class HAlign { LEFT, CENTER, RIGHT, JUSTIFY }
+
+internal data class TextBody(
+    val paragraphs: List<Paragraph>,
+    val anchor: VAnchor = VAnchor.TOP,
+    val insetLeftEmu: Long = 91440,
+    val insetTopEmu: Long = 45720,
+    val insetRightEmu: Long = 91440,
+    val insetBottomEmu: Long = 45720,
+    /** PowerPoint's "shrink text on overflow"; the renderer may scale down to fit. */
+    val autoFit: Boolean = false,
+    /** The smallest scale auto-fit may shrink the text to. */
+    val autoFitFloor: Float = 0.45f
+)
+
+internal data class Paragraph(
+    val runs: List<Run>,
+    val align: HAlign = HAlign.LEFT,
+    /** Indent level 0..8, used for bullet indentation. */
+    val level: Int = 0,
+    val bullet: String? = null,
+    val spaceBeforePt: Float = 0f,
+    val spaceAfterPt: Float = 0f,
+    val lineSpacingPercent: Float = 100f,
+    /** Where wrapped text lines start, from the text box's inner left edge. Null
+     *  = derive from [level]. */
+    val marginLeftEmu: Long? = null,
+    /** Where the first line (and its bullet) starts; null = [marginLeftEmu]. */
+    val bulletIndentEmu: Long? = null,
+    val bulletColorArgb: Int? = null,
+    val bulletSizePercent: Float = 100f,
+    /** Explicit tab stops, from the text box's inner left edge. */
+    val tabStopsEmu: List<Long> = emptyList(),
+    /** Spacing of the implicit tab stops after the explicit ones. */
+    val defaultTabEmu: Long = 914400
+) {
+    val isEmpty: Boolean get() = runs.all { it.text.isEmpty() }
+    val plainText: String get() = runs.joinToString("") { it.text }
+}
+
+internal data class Run(
+    val text: String,
+    val sizePt: Float = 18f,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val underline: Boolean = false,
+    val colorArgb: Int = 0xFF000000.toInt(),
+    val fontFamily: String? = null,
+    /** Superscript (> 0) / subscript (< 0) offset as a percent of the line height. */
+    val baselinePercent: Float = 0f
+)
