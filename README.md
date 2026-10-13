@@ -26,6 +26,17 @@ val pageCount = OfficeCanvas.render(context, file) { index, bitmap ->
 - `longSidePx` (default 1600) sets the size of a page's longer side; the other side follows the page's aspect ratio.
 - Rendering is synchronous. Call it off the main thread.
 - Anything that isn't a readable PPTX, PPT or HWPX raises `OfficeCanvasException`.
+- At most `OfficeCanvas.MAX_PAGES` (1000) pages are rendered.
+
+### Files from other people
+
+Documents are parsed as if they could be hostile, since they usually come from someone else:
+
+- XML parts that carry a DTD are refused, so entity expansion and external entities are closed whichever XML parser the platform provides.
+- Sizes and counts read from a file are checked against the data actually present before anything is allocated, every chain or loop in a file is followed at most once, nesting stops at 32 levels, decoded pictures are subsampled to at most 16 million pixels, and output stops at 1000 pages.
+- A damaged shape, picture or slide is skipped; anything worse, including running out of memory, comes out as `OfficeCanvasException` rather than an `Error`.
+
+`MaliciousInputTest` holds the crafted files these rules were written against.
 
 The `sample` module is a one-screen app: pick a document and its pages appear in a list.
 

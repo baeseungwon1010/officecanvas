@@ -30,6 +30,12 @@ It needs python-pptx, Pillow and lxml, and LibreOffice for the `.pptx` → `.ppt
 
 The `.hwpx` generator lays text out with fixed metrics instead of a real layout engine, so it exercises the parser's reading of saved line positions, page breaks and margins, but not Hangul's own layout decisions. It has not been opened in Hangul.
 
+## Hostile input
+
+`MaliciousInputTest` feeds crafted inputs, each a few bytes to a few kilobytes, that once crashed, hung or exhausted memory: OLE2 headers with absurd FAT sizes and looping chains, a negative count in a PPT9 atom, a WMF record whose length wraps to zero, EMF and TIFF counts in the billions, SVG nested 10,000 deep, a PNG of 100,000 x 4,000 pixels, an HWPX table declaring 50,000 x 50,000 cells, one slide listed 50,000 times, and parts with a DTD. Each must finish within seconds on a thread with a 1 MB stack, and anything thrown out of `OfficeCanvas.render` must be an `OfficeCanvasException`.
+
+`AndroidXmlParserTest` parses the sample documents with Android's own XML parser (shipped in Robolectric's android-all), because the JDK parser unit tests otherwise use accepts hardening options that Android's rejects.
+
 ## Comparing against LibreOffice
 
 ```

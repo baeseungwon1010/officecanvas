@@ -40,6 +40,8 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 
 **`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), `SvgRenderer` (the SVG subset of Office icons), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
 
+**`util`**: `SafeXml` (XML parsing for untrusted parts: DTDs refused, hardening features requested one at a time because Android's parser rejects the ones it doesn't know, parts capped at 32 MB), `SafeBitmaps` (raster decoding with a pixel budget) and `Limits` (pages, nesting, input size).
+
 ## Memory
 
 Each renderer draws a page, hands the bitmap to the caller and moves on. A 60-slide deck at 1600 px would be around 350 MB of bitmaps if they were collected into a list first. Large embedded photos are decoded with `inSampleSize` close to their drawn size.
