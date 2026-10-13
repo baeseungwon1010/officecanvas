@@ -1,7 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.slide
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -15,6 +14,8 @@ import android.text.TextPaint
 import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.WmfRenderer
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
+import io.github.baeseungwon1010.officecanvas.util.readCapped
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -74,21 +75,30 @@ internal object SlideRenderer {
 
     private fun renderSlide(slide: Slide, zip: ZipFile?, scale: Double, pxW: Int, pxH: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(slide.backgroundArgb ?: Color.WHITE)
-
-        for (element in slide.elements) {
-            try {
-                when (element) {
-                    is Element.Shape -> drawShape(canvas, element, scale)
-                    is Element.Picture -> drawPicture(canvas, element, zip, scale)
-                    is Element.Table -> drawTable(canvas, element, scale)
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(slide.backgroundArgb ?: Color.WHITE)
+            for (element in slide.elements) {
+                try {
+                    when (element) {
+                        is Element.Shape -> drawShape(canvas, element, scale)
+                        is Element.Picture -> drawPicture(canvas, element, zip, scale)
+                        is Element.Table -> drawTable(canvas, element, scale)
+                    }
+                } catch (e: Exception) {
+                    // One bad shape (a corrupt embedded image, say) should not blank the
+                    // rest of a slide that is otherwise fine.
+                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                } catch (e: OutOfMemoryError) {
+                    // Nor should one picture too large to decode.
+                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                } catch (e: StackOverflowError) {
+                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                // One bad shape (a corrupt embedded image, say) should not blank the
-                // rest of a slide that is otherwise fine.
-                if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
             }
+        } catch (e: Throwable) {
+            bitmap.recycle()
+            throw e
         }
         return bitmap
     }
@@ -331,7 +341,7 @@ internal object SlideRenderer {
         picture.emfBytes?.let { EmfRenderer.draw(canvas, it, rect); return }
         picture.wmfBytes?.let { WmfRenderer.draw(canvas, it, rect); return }
         val bytes = picture.imageBytes ?: picture.imageEntry?.let { entryName ->
-            zip?.getEntry(entryName)?.let { entry -> zip.getInputStream(entry).use { it.readBytes() } }
+            zip?.getEntry(entryName)?.let { entry -> zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES) }
         } ?: return
         when {
             isEmf(bytes) -> { EmfRenderer.draw(canvas, bytes, rect); return }
@@ -339,9 +349,12 @@ internal object SlideRenderer {
             isRawWmf(bytes) -> { WmfRenderer.fromRaw(bytes)?.let { WmfRenderer.draw(canvas, it, rect) }; return }
             isSvg(bytes) -> { SvgRenderer.draw(canvas, bytes, rect); return }
         }
-        val bitmap = decodeForSize(bytes, rect.width(), rect.height()) ?: return
-        canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
-        bitmap.recycle()
+        val bitmap = SafeBitmaps.decode(bytes, rect.width(), rect.height()) ?: return
+        try {
+            canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun le32(b: ByteArray, o: Int) = if (b.size < o + 4) 0 else
@@ -355,29 +368,6 @@ internal object SlideRenderer {
         if (!head.startsWith("<")) return false
         val root = Regex("<([A-Za-z][\\w:.-]*)").findAll(head).map { it.groupValues[1] }.firstOrNull { !it.startsWith("!") }
         return root?.substringAfter(':') == "svg"
-    }
-
-    /**
-     * Decodes at roughly the size it will be drawn. A single bilinear draw from a
-     * picture many times larger than its box (a 2000px diagram into a 260px slot)
-     * samples only a few source pixels per output pixel, so thin lines and small
-     * text simply vanish; subsampled decoding plus halving steps averages them in
-     * instead — and keeps a huge photo from costing its full size in memory.
-     */
-    private fun decodeForSize(bytes: ByteArray, targetW: Float, targetH: Float): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        if (bounds.outWidth > 0 && bounds.outHeight > 0) {
-            while (bounds.outWidth / (sample * 2) >= targetW * 2 && bounds.outHeight / (sample * 2) >= targetH * 2) sample *= 2
-        }
-        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
-        while (bmp.width >= targetW * 2 && bmp.height >= targetH * 2 && bmp.width > 2 && bmp.height > 2) {
-            val half = Bitmap.createScaledBitmap(bmp, bmp.width / 2, bmp.height / 2, true)
-            if (half !== bmp) bmp.recycle()
-            bmp = half
-        }
-        return bmp
     }
 
     private fun drawTable(canvas: Canvas, table: Element.Table, scale: Double) {
@@ -540,7 +530,11 @@ internal object SlideRenderer {
      *  point is exactly 12700 EMU, so this is the one place font-size unit conversion
      *  happens — everything else in this file already works in pixels. */
     private fun ptToPx(pt: Float, scale: Double, shrink: Float): Float =
-        (pt * EMU_PER_POINT * scale * shrink).toFloat()
+        (pt.coerceAtMost(MAX_FONT_PT) * EMU_PER_POINT * scale * shrink).toFloat()
+
+    /** Office's own maximum font size. */
+    private const val MAX_FONT_PT = 4000f
+    private const val MAX_TAB_STOPS = 256
 
     private fun buildLayout(
         p: Paragraph, width: Int, scale: Double, shrink: Float,
@@ -606,7 +600,8 @@ internal object SlideRenderer {
                 .filter { it > 0.5f }.distinct().sorted().toMutableList()
             val step = (p.defaultTabEmu * scale).toFloat().coerceAtLeast(4f)
             var next = ((stops.lastOrNull()?.plus(origin) ?: 0f) / step).toInt() * step + step - origin
-            while (next < width * 2) { if (next > 0f) stops += next; next += step }
+            // Enough implicit stops to cross the line, but never thousands of spans.
+            while (next < width * 2 && stops.size < MAX_TAB_STOPS) { if (next > 0f) stops += next; next += step }
             for (stop in stops) {
                 spannable.setSpan(android.text.style.TabStopSpan.Standard(stop.toInt()), 0, spannable.length, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
             }

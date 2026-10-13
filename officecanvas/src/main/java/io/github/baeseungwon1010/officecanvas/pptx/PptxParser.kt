@@ -5,6 +5,7 @@ import io.github.baeseungwon1010.officecanvas.slide.Crop
 import io.github.baeseungwon1010.officecanvas.slide.Deck
 import io.github.baeseungwon1010.officecanvas.slide.Slide
 import io.github.baeseungwon1010.officecanvas.slide.TableCell
+import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import org.w3c.dom.Document
 import org.w3c.dom.Element as DomElement
@@ -49,8 +50,22 @@ internal object PptxParser {
     }
 
     /** Everything one slide inherits, resolved for its color map. */
+    /** Parts read once per deck: many slides share a layout, master and theme, and
+     *  a crafted deck could otherwise make every slide re-read one huge part. */
+    private class DeckCache(val zip: ZipFile) {
+        private val parts = HashMap<String, Part?>()
+        private val themes = HashMap<String, Theme>()
+        private val docs = HashMap<String, Document?>()
+        private val relsByPart = HashMap<String, Map<String, String>>()
+
+        fun part(path: String?): Part? = path?.let { p -> parts.getOrPut(p) { zip.xml(p)?.let { Part(p, it, rels(p)) } } }
+        fun theme(path: String): Theme = themes.getOrPut(path) { Theme.load(zip, path) }
+        fun xml(path: String): Document? = docs.getOrPut(path) { zip.xml(path) }
+        fun rels(path: String): Map<String, String> = relsByPart.getOrPut(path) { zip.rels(path) }
+    }
+
     private class SlideContext(
-        val zip: ZipFile,
+        val cache: DeckCache,
         val theme: Theme,
         val layout: Part?,
         val master: Part?,
@@ -60,8 +75,7 @@ internal object PptxParser {
         val defaultStyle: Map<Int, LevelStyle>,
         val tableStyles: Map<String, DomElement>
     ) {
-        private val relsCache = HashMap<String, Map<String, String>>()
-        fun rels(part: String): Map<String, String> = relsCache.getOrPut(part) { zip.rels(part) }
+        fun rels(part: String): Map<String, String> = cache.rels(part)
 
         /** The layout and master placeholders a slide placeholder inherits from, nearest first. */
         fun inherited(type: String, idx: String?): List<Placeholder> {
@@ -93,21 +107,19 @@ internal object PptxParser {
         // slide7.xml can perfectly well be the second slide shown.
         val presRels = zip.rels("ppt/presentation.xml")
         val slidePaths = presentation.descendants(NS_P, "sldId").mapNotNull { presRels[it.getAttributeNS(NS_R, "id")] }
+            .distinct().take(Limits.MAX_PAGES)
         val defaultTextStyle = presentation.first(NS_P, "defaultTextStyle")
         val tableStyles = zip.xml("ppt/tableStyles.xml")?.documentElement?.all(NS_A, "tblStyle").orEmpty()
             .associateBy { it.getAttribute("styleId") }
 
-        val parts = HashMap<String, Part?>()
-        fun part(path: String?): Part? = path?.let { p ->
-            parts.getOrPut(p) { zip.xml(p)?.let { Part(p, it, zip.rels(p)) } }
-        }
+        val cache = DeckCache(zip)
 
         val slides = slidePaths.mapNotNull { path ->
             val doc = zip.xml(path) ?: return@mapNotNull Slide(null, emptyList())
             // Hidden slides are left out, as PowerPoint's own PDF export does.
             if (doc.documentElement.getAttribute("show") == "0") return@mapNotNull null
             try {
-                parseSlide(zip, path, doc, widthEmu, heightEmu, ::part, defaultTextStyle, tableStyles)
+                parseSlide(cache, path, doc, widthEmu, heightEmu, defaultTextStyle, tableStyles)
             } catch (e: Exception) {
                 // One unreadable slide should cost one slide, not the whole deck.
                 Slide(backgroundArgb = null, elements = emptyList())
@@ -117,12 +129,12 @@ internal object PptxParser {
     }
 
     private fun parseSlide(
-        zip: ZipFile, path: String, doc: Document, widthEmu: Long, heightEmu: Long,
-        part: (String?) -> Part?, defaultTextStyle: DomElement?, tableStyles: Map<String, DomElement>
+        cache: DeckCache, path: String, doc: Document, widthEmu: Long, heightEmu: Long,
+        defaultTextStyle: DomElement?, tableStyles: Map<String, DomElement>
     ): Slide {
-        val slide = Part(path, doc, zip.rels(path))
-        val layout = part(slide.rels.values.firstOrNull { "slideLayout" in it })
-        val master = part(layout?.rels?.values?.firstOrNull { "slideMaster" in it })
+        val slide = Part(path, doc, cache.rels(path))
+        val layout = cache.part(slide.rels.values.firstOrNull { "slideLayout" in it })
+        val master = cache.part(layout?.rels?.values?.firstOrNull { "slideMaster" in it })
         val themePath = master?.rels?.values?.firstOrNull { "/theme" in it }
 
         // Color map: the master's, unless the layout or slide overrides it.
@@ -130,11 +142,11 @@ internal object PptxParser {
         for (p in listOfNotNull(layout, slide)) {
             Theme.colorMapOf(p.root.child(NS_P, "clrMapOvr")?.child(NS_A, "overrideClrMapping"))?.let { colorMap = it }
         }
-        val theme = (themePath?.let { Theme.load(zip, it) } ?: Theme.EMPTY).withColorMap(colorMap)
+        val theme = (themePath?.let { cache.theme(it) } ?: Theme.EMPTY).withColorMap(colorMap)
 
         val txStyles = master?.root?.child(NS_P, "txStyles")
         val ctx = SlideContext(
-            zip, theme, layout, master,
+            cache, theme, layout, master,
             titleStyle = theme.levelStyles(txStyles?.child(NS_P, "titleStyle")),
             bodyStyle = theme.levelStyles(txStyles?.child(NS_P, "bodyStyle")),
             otherStyle = theme.levelStyles(txStyles?.child(NS_P, "otherStyle")),
@@ -174,7 +186,8 @@ internal object PptxParser {
      * [decoration] is true for a master or layout: its placeholders are "click to add
      * title" prompts that are never shown themselves, only inherited from.
      */
-    private fun shapeTree(tree: DomElement, part: String, ctx: SlideContext, decoration: Boolean): List<Item> {
+    private fun shapeTree(tree: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int = 0): List<Item> {
+        if (depth > Limits.MAX_NESTING) return emptyList()
         val out = mutableListOf<Item>()
         for (child in tree.children()) {
             when (child.localName) {
@@ -184,13 +197,13 @@ internal object PptxParser {
                 }
                 "pic" -> picture(child, part, ctx)?.let { out += it }
                 "graphicFrame" -> out += graphicFrame(child, part, ctx)
-                "grpSp" -> out += group(child, part, ctx, decoration)
+                "grpSp" -> out += group(child, part, ctx, decoration, depth + 1)
                 // Newer content (equations, some 3-D models) comes with a fallback
                 // older readers understand, usually a picture of it.
                 "AlternateContent" -> {
                     val branch = child.child(NS_MC, "Fallback")?.takeIf { it.children().isNotEmpty() }
                         ?: child.child(NS_MC, "Choice")
-                    branch?.let { out += shapeTree(it, part, ctx, decoration) }
+                    branch?.let { out += shapeTree(it, part, ctx, decoration, depth + 1) }
                 }
             }
         }
@@ -201,8 +214,8 @@ internal object PptxParser {
      * A group has a child-space rectangle (chOff/chExt) and a placed rectangle
      * (off/ext); its children are in child space and are mapped onto the placed one.
      */
-    private fun group(node: DomElement, part: String, ctx: SlideContext, decoration: Boolean): List<Item> {
-        val children = shapeTree(node, part, ctx, decoration)
+    private fun group(node: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int): List<Item> {
+        val children = shapeTree(node, part, ctx, decoration, depth)
         val xfrm = node.child(NS_P, "grpSpPr")?.child(NS_A, "xfrm") ?: return children
         val off = xfrm.child(NS_A, "off"); val ext = xfrm.child(NS_A, "ext")
         val chOff = xfrm.child(NS_A, "chOff"); val chExt = xfrm.child(NS_A, "chExt")
@@ -339,20 +352,21 @@ internal object PptxParser {
     private fun smartArt(relIds: DomElement, frame: Box, part: String, ctx: SlideContext): List<Item> {
         val rels = ctx.rels(part)
         val dataPath = rels[relIds.getAttributeNS(NS_R, "dm")] ?: return emptyList()
-        val drawingId = ctx.zip.xml(dataPath)?.descendants(NS_DSP, "dataModelExt")?.firstOrNull()?.attr("relId")
+        val drawingId = ctx.cache.xml(dataPath)?.descendants(NS_DSP, "dataModelExt")?.firstOrNull()?.attr("relId")
         val drawingPath = drawingId?.let { rels[it] }
             ?: ctx.rels(dataPath).values.firstOrNull { "drawing" in it.substringAfterLast('/') }
             ?: return emptyList()
-        val tree = ctx.zip.xml(drawingPath)?.first(NS_DSP, "spTree") ?: return emptyList()
+        val tree = ctx.cache.xml(drawingPath)?.first(NS_DSP, "spTree") ?: return emptyList()
         val origin = Box(frame.x, frame.y, 0, 0)
         val out = mutableListOf<Item>()
-        fun walk(t: DomElement) {
+        fun walk(t: DomElement, depth: Int) {
+            if (depth > Limits.MAX_NESTING) return
             for (child in t.children()) when (child.localName) {
                 "sp" -> out += shape(child, NS_DSP, drawingPath, ctx, origin)
-                "grpSp" -> walk(child)
+                "grpSp" -> walk(child, depth + 1)
             }
         }
-        walk(tree)
+        walk(tree, 0)
         return out
     }
 
@@ -468,14 +482,15 @@ internal object PptxParser {
     private fun rotationOf(spPr: DomElement?): Float =
         spPr?.child(NS_A, "xfrm")?.longOrNull("rot")?.let { it / 60000f } ?: 0f
 
-    private fun collectPlaceholders(tree: DomElement, part: String): List<Placeholder> {
+    private fun collectPlaceholders(tree: DomElement, part: String, depth: Int = 0): List<Placeholder> {
         val out = mutableListOf<Placeholder>()
+        if (depth > Limits.MAX_NESTING) return out
         for (child in tree.children()) {
             when (child.localName) {
                 "sp", "pic", "graphicFrame" -> placeholderOf(child)?.let { ph ->
                     out += Placeholder(ph.attr("type") ?: "obj", ph.attr("idx"), child, part)
                 }
-                "grpSp" -> out += collectPlaceholders(child, part)
+                "grpSp" -> out += collectPlaceholders(child, part, depth + 1)
             }
         }
         return out

@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.hwpx
 
+import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import org.w3c.dom.Document
 import org.w3c.dom.Element as DomElement
@@ -66,11 +67,12 @@ internal object HwpxParser {
         val pages = mutableListOf<HwpxPage>()
         var lastGeometry = PageGeometry(59528, 84186) // A4, used only if a section's secPr is unreadable
         for (path in sectionPaths) {
+            if (pages.size >= Limits.MAX_PAGES) break
             try {
                 val doc = zip.xml(path) ?: continue
                 parseSection(doc, header, lastGeometry).forEach { (geometry, page) ->
                     lastGeometry = geometry
-                    pages += page
+                    if (pages.size < Limits.MAX_PAGES) pages += page
                 }
             } catch (e: Exception) {
                 // One unreadable section costs its own pages, not the whole document.
@@ -96,15 +98,18 @@ internal object HwpxParser {
             val margin = pagePr?.child(HP, "margin")
             val bodyX = (margin?.longOrNull("left") ?: 0L) + (margin?.longOrNull("gutter") ?: 0L)
             val bodyY = (margin?.longOrNull("top") ?: 0L) + (margin?.longOrNull("header") ?: 0L)
-            if (w != null && h != null) PageGeometry(w, h, bodyX, bodyY) else null
+            if (w != null && h != null && w > 0 && h > 0) PageGeometry(w, h, bodyX, bodyY) else null
         } ?: fallbackGeometry
 
         val pages = mutableListOf<MutableList<HwpxElement>>(mutableListOf())
         var lastVertpos = -1L
 
         for (p in paragraphs) {
-            for (el in parseParagraphFlow(p, header)) {
-                if (el.yHu < lastVertpos) pages.add(mutableListOf())
+            for (el in parseParagraphFlow(p, header, 0)) {
+                if (el.yHu < lastVertpos) {
+                    if (pages.size >= Limits.MAX_PAGES) break
+                    pages.add(mutableListOf())
+                }
                 lastVertpos = el.yHu
                 pages.last() += el
             }
@@ -129,7 +134,7 @@ internal object HwpxParser {
      * would misdraw its position and corrupt page-break detection (a table's y
      * would then look like it went backwards on every page that has one).
      */
-    private fun parseParagraphFlow(p: DomElement, header: Header): List<HwpxElement> {
+    private fun parseParagraphFlow(p: DomElement, header: Header, depth: Int): List<HwpxElement> {
         val text = StringBuilder()
         val inlineAt = mutableMapOf<Int, HwpxElement>() // stream offset -> object
         // Marks where each run's text starts in the concatenated stream, so a
@@ -145,7 +150,7 @@ internal object HwpxParser {
                         runBoundaries += text.length to style
                         text.append(child.textContent ?: "")
                     }
-                    "tbl" -> parseTable(child, header)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    "tbl" -> parseTable(child, header, depth + 1)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                     "pic" -> parsePicture(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                 }
             }
@@ -206,7 +211,8 @@ internal object HwpxParser {
         is HwpxElement.TextRun -> copy(xHu = x, yHu = y)
     }
 
-    private fun parseTable(tbl: DomElement, header: Header): HwpxElement.Table? {
+    private fun parseTable(tbl: DomElement, header: Header, depth: Int): HwpxElement.Table? {
+        if (depth > Limits.MAX_NESTING) return null
         val sz = tbl.child(HP, "sz") ?: return null
         // treatAsChar tables sit inline in the text flow, so their placement is
         // wherever the paragraph put them (an offset would double count) — only a
@@ -219,15 +225,19 @@ internal object HwpxParser {
         // once up front rather than grown as cells are seen — growing it caused an
         // out-of-bounds write whenever a later row turned out wider than an
         // already-appended earlier one (a row with a spanned cell, for instance).
-        val rowCnt = tbl.getAttribute("rowCnt").toIntOrNull()?.coerceAtLeast(0) ?: 0
-        val colCnt = tbl.getAttribute("colCnt").toIntOrNull()?.coerceAtLeast(0) ?: 0
+        // The declared size is trusted only as far as the cells actually present: a
+        // crafted 50000 x 50000 declaration must not allocate 2.5 billion slots.
+        val tcs = tbl.all(HP, "tr").flatMap { it.all(HP, "tc") }
+        fun addr(attr: String) = tcs.maxOfOrNull { it.child(HP, "cellAddr")?.getAttribute(attr)?.toIntOrNull() ?: 0 } ?: -1
+        val rowCnt = (tbl.getAttribute("rowCnt").toIntOrNull() ?: 0).coerceIn(0, addr("rowAddr") + 1)
+        val colCnt = (tbl.getAttribute("colCnt").toIntOrNull() ?: 0).coerceIn(0, addr("colAddr") + 1)
         if (rowCnt == 0 || colCnt == 0) return null
         val rows = MutableList(rowCnt) { MutableList<TableCell?>(colCnt) { null } }
         val colWidths = sortedMapOf<Int, Long>()
         val rowHeights = sortedMapOf<Int, Long>()
 
         // <hp:tc> sits inside <hp:tr> (one per row), not directly under <hp:tbl>.
-        for (tc in tbl.all(HP, "tr").flatMap { it.all(HP, "tc") }) {
+        for (tc in tcs) {
             val addr = tc.child(HP, "cellAddr") ?: continue
             val span = tc.child(HP, "cellSpan")
             val col = addr.getAttribute("colAddr").toIntOrNull() ?: continue
@@ -239,7 +249,7 @@ internal object HwpxParser {
             // A cell's own nested table/picture is out of scope for this pass (the
             // cell coordinate space would need to nest too) — text only.
             val cellRuns = tc.child(HP, "subList")?.all(HP, "p").orEmpty().flatMap { cellP ->
-                parseParagraphFlow(cellP, header).filterIsInstance<HwpxElement.TextRun>()
+                parseParagraphFlow(cellP, header, depth).filterIsInstance<HwpxElement.TextRun>()
             }
             // <hp:cellSz> is a declared minimum that real content routinely outgrows
             // without it being kept in sync — one real sample had a 6-line answer

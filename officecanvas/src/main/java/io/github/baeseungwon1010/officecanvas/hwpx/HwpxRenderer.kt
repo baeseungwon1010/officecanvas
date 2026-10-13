@@ -1,11 +1,12 @@
 package io.github.baeseungwon1010.officecanvas.hwpx
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
+import io.github.baeseungwon1010.officecanvas.util.readCapped
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -27,11 +28,8 @@ internal object HwpxRenderer {
     fun render(doc: HwpxDoc, hwpxFile: File, targetLongSidePx: Int, onPage: (index: Int, bitmap: Bitmap) -> Unit) {
         ZipFile(hwpxFile).use { zip ->
             doc.pages.forEachIndexed { index, page ->
-                val scale = if (page.widthHu >= page.heightHu) {
-                    targetLongSidePx.toDouble() / page.widthHu
-                } else {
-                    targetLongSidePx.toDouble() / page.heightHu
-                }
+                if (page.widthHu <= 0 || page.heightHu <= 0) return@forEachIndexed
+                val scale = targetLongSidePx.toDouble() / maxOf(page.widthHu, page.heightHu)
                 val pxW = (page.widthHu * scale).toInt().coerceAtLeast(1)
                 val pxH = (page.heightHu * scale).toInt().coerceAtLeast(1)
                 onPage(index, renderPage(page, zip, scale, pxW, pxH))
@@ -41,19 +39,26 @@ internal object HwpxRenderer {
 
     private fun renderPage(page: HwpxPage, zip: ZipFile, scale: Double, pxW: Int, pxH: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.WHITE)
-        canvas.translate((page.bodyXHu * scale).toFloat(), (page.bodyYHu * scale).toFloat())
-        for (el in page.elements) {
-            try {
-                when (el) {
-                    is HwpxElement.TextRun -> drawText(canvas, el, 0.0, 0.0, scale)
-                    is HwpxElement.Table -> drawTable(canvas, el, scale)
-                    is HwpxElement.ImageEl -> drawImage(canvas, el, zip, scale)
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(Color.WHITE)
+            canvas.translate((page.bodyXHu * scale).toFloat(), (page.bodyYHu * scale).toFloat())
+            for (el in page.elements) {
+                try {
+                    when (el) {
+                        is HwpxElement.TextRun -> drawText(canvas, el, 0.0, 0.0, scale)
+                        is HwpxElement.Table -> drawTable(canvas, el, scale)
+                        is HwpxElement.ImageEl -> drawImage(canvas, el, zip, scale)
+                    }
+                } catch (e: Exception) {
+                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                } catch (e: OutOfMemoryError) {
+                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
             }
+        } catch (e: Throwable) {
+            bitmap.recycle()
+            throw e
         }
         return bitmap
     }
@@ -110,12 +115,16 @@ internal object HwpxRenderer {
         val entry = zip.entries().asSequence().firstOrNull {
             it.name.startsWith("BinData/${image.zipEntry}") || it.name.startsWith("BinData/${image.zipEntry}.")
         } ?: return
-        val bitmap = zip.getInputStream(entry).use { BitmapFactory.decodeStream(it) } ?: return
         val rect = RectF(
             (image.xHu * scale).toFloat(), (image.yHu * scale).toFloat(),
             ((image.xHu + image.widthHu) * scale).toFloat(), ((image.yHu + image.heightHu) * scale).toFloat()
         )
-        canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
-        bitmap.recycle()
+        val bytes = zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES) ?: return
+        val bitmap = SafeBitmaps.decode(bytes, rect.width(), rect.height()) ?: return
+        try {
+            canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        } finally {
+            bitmap.recycle()
+        }
     }
 }
