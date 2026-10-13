@@ -32,6 +32,31 @@ internal object WmfRenderer {
         return out.array()
     }
 
+    /**
+     * Gives a WMF without a placeable header one, taking the extent from its
+     * SetWindowOrg/SetWindowExt records (the first of each). Null when it has none.
+     */
+    fun fromRaw(wmf: ByteArray): ByteArray? {
+        val b = ByteBuffer.wrap(wmf).order(ByteOrder.LITTLE_ENDIAN)
+        var off = 18
+        var orgX = 0; var orgY = 0
+        var ext: Pair<Int, Int>? = null
+        while (off + 6 <= wmf.size) {
+            val words = b.getInt(off).toLong() and 0xFFFFFFFFL
+            if (words < 3) break
+            when (b.getShort(off + 4).toInt() and 0xFFFF) {
+                0x020B -> { orgY = b.getShort(off + 6).toInt(); orgX = b.getShort(off + 8).toInt() }
+                0x020C -> if (ext == null) ext = b.getShort(off + 8).toInt() to b.getShort(off + 6).toInt()
+                0x0000 -> break
+            }
+            if (ext != null && off > 18) break
+            off += (words * 2).toInt().coerceAtMost(wmf.size)
+        }
+        val (w, h) = ext ?: return null
+        if (w == 0 || h == 0) return null
+        return placeable(wmf, orgX, orgY, orgX + w, orgY + h)
+    }
+
     fun draw(canvas: Canvas, wmf: ByteArray, dst: RectF) {
         if (wmf.size < 40) return
         val b = ByteBuffer.wrap(wmf).order(ByteOrder.LITTLE_ENDIAN)

@@ -13,6 +13,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
+import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.WmfRenderer
 import java.io.File
 import java.util.zip.ZipFile
@@ -298,25 +299,36 @@ internal object SlideRenderer {
 
     private fun drawPictureContent(canvas: Canvas, picture: Element.Picture, zip: ZipFile?, rect: RectF) {
         // Sources: extracted bytes (.ppt, from its blip store), or a zip entry
-        // (.pptx). EMF is vector and goes to EmfRenderer; the rest is raster.
-        val emf = picture.emfBytes ?: picture.imageEntry?.takeIf { it.endsWith(".emf", ignoreCase = true) }
-            ?.let { name -> zip?.getEntry(name)?.let { e -> zip.getInputStream(e).use { it.readBytes() } } }
-        if (emf != null) {
-            EmfRenderer.draw(canvas, emf, rect)
-            return
-        }
-        val wmf = picture.wmfBytes ?: picture.imageEntry?.takeIf { it.endsWith(".wmf", ignoreCase = true) }
-            ?.let { name -> zip?.getEntry(name)?.let { e -> zip.getInputStream(e).use { it.readBytes() } } }
-        if (wmf != null) {
-            WmfRenderer.draw(canvas, wmf, rect)
-            return
-        }
+        // (.pptx). Vector formats go to their players; the rest is raster. A zip
+        // entry's format is told from its bytes, not its name: decks do carry
+        // WMF files named .emf.
+        picture.emfBytes?.let { EmfRenderer.draw(canvas, it, rect); return }
+        picture.wmfBytes?.let { WmfRenderer.draw(canvas, it, rect); return }
         val bytes = picture.imageBytes ?: picture.imageEntry?.let { entryName ->
             zip?.getEntry(entryName)?.let { entry -> zip.getInputStream(entry).use { it.readBytes() } }
         } ?: return
+        when {
+            isEmf(bytes) -> { EmfRenderer.draw(canvas, bytes, rect); return }
+            isPlaceableWmf(bytes) -> { WmfRenderer.draw(canvas, bytes, rect); return }
+            isRawWmf(bytes) -> { WmfRenderer.fromRaw(bytes)?.let { WmfRenderer.draw(canvas, it, rect) }; return }
+            isSvg(bytes) -> { SvgRenderer.draw(canvas, bytes, rect); return }
+        }
         val bitmap = decodeForSize(bytes, rect.width(), rect.height()) ?: return
         canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         bitmap.recycle()
+    }
+
+    private fun le32(b: ByteArray, o: Int) = if (b.size < o + 4) 0 else
+        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
+    private fun isEmf(b: ByteArray) = le32(b, 0) == 1 && le32(b, 40) == 0x464D4520
+    private fun isPlaceableWmf(b: ByteArray) = le32(b, 0) == 0x9AC6CDD7.toInt()
+    private fun isRawWmf(b: ByteArray) = b.size > 18 && (b[0].toInt() == 1 || b[0].toInt() == 2) && b[1].toInt() == 0 && b[2].toInt() == 9 && b[3].toInt() == 0
+    /** An XML document whose root is <svg> (raster files can carry "<svg" in metadata). */
+    private fun isSvg(b: ByteArray): Boolean {
+        val head = String(b, 0, minOf(b.size, 4096), Charsets.UTF_8).trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+        if (!head.startsWith("<")) return false
+        val root = Regex("<([A-Za-z][\\w:.-]*)").findAll(head).map { it.groupValues[1] }.firstOrNull { !it.startsWith("!") }
+        return root?.substringAfter(':') == "svg"
     }
 
     /**
