@@ -1,13 +1,15 @@
 package io.github.baeseungwon1010.officecanvas.pptx
 
-import io.github.baeseungwon1010.officecanvas.slide.*
-
+import io.github.baeseungwon1010.officecanvas.slide.Box
+import io.github.baeseungwon1010.officecanvas.slide.Crop
+import io.github.baeseungwon1010.officecanvas.slide.Deck
+import io.github.baeseungwon1010.officecanvas.slide.Slide
+import io.github.baeseungwon1010.officecanvas.slide.TableCell
 import org.w3c.dom.Document
 import org.w3c.dom.Element as DomElement
-import org.w3c.dom.Node
 import java.io.File
 import java.util.zip.ZipFile
-import javax.xml.parsers.DocumentBuilderFactory
+import io.github.baeseungwon1010.officecanvas.slide.Element as Item
 
 /**
  * Reads a .pptx into a [Deck].
@@ -17,121 +19,64 @@ import javax.xml.parsers.DocumentBuilderFactory
  * tested against real decks without a device.
  *
  * A slide's actual appearance is rarely self-contained: it draws through a chain
- * (slide -> slideLayout -> slideMaster -> theme), inheriting position, decoration,
- * and text style at each hop unless it overrides one. This parser resolves that
- * chain once per slide rather than treating the slide's own XML as the whole story
- * — the alternative is a converter that only renders decks nobody actually made
- * from a template, which is close to none of them.
+ * (slide -> slideLayout -> slideMaster -> theme), inheriting position, fill, body
+ * properties, text style and background at each hop unless it overrides one. This
+ * parser resolves that chain once per slide, so the model it hands the renderer is
+ * flat.
  */
 internal object PptxParser {
 
-    private const val A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-    private const val P = "http://schemas.openxmlformats.org/presentationml/2006/main"
-    private const val R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
-    /** PowerPoint's own default outline weight (1pt) when <a:ln> omits "w". */
+    /** PowerPoint's own default outline weight when <a:ln> omits "w". */
     private const val DEFAULT_LINE_WIDTH_EMU = 12700L
 
     class ParseException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-    /** Resolved theme palette: scheme name ("tx1", "accent1", ...) to ARGB. */
-    private class Theme(private val colors: Map<String, Int>) {
-        /**
-         * bg1/tx1/bg2/tx2 are logical slots that a slide master's <p:clrMap> can
-         * repoint at any of dk1/lt1/dk2/lt2 (a dark-background master often maps
-         * bg1 -> dk1 instead of the "obvious" lt1). Reading that map is more
-         * machinery than a converter needs for the gain, so the near-universal
-         * default mapping is used directly; a master with an unusual clrMap will
-         * see incorrect contrast rather than a missing color.
-         */
-        fun resolve(schemeName: String): Int? {
-            val key = when (schemeName) {
-                "bg1" -> "lt1"; "tx1" -> "dk1"
-                "bg2" -> "lt2"; "tx2" -> "dk2"
-                "phClr" -> return null // inherited placeholder color; not tracked here
-                else -> schemeName
-            }
-            return colors[key]
-        }
+    /** A placeholder on a layout or master: what a slide placeholder inherits. */
+    private class Placeholder(val type: String, val idx: String?, val node: DomElement, val part: String) {
+        val spPr: DomElement? get() = node.child(NS_P, "spPr")
+        val style: DomElement? get() = node.child(NS_P, "style")
+        val txBody: DomElement? get() = node.child(NS_P, "txBody")
+    }
 
-        companion object {
-            val EMPTY = Theme(emptyMap())
+    /** A layout or master part. */
+    private class Part(val path: String, val doc: Document, val rels: Map<String, String>) {
+        val root: DomElement get() = doc.documentElement
+        val tree: DomElement? get() = root.child(NS_P, "cSld")?.child(NS_P, "spTree")
+        val placeholders: List<Placeholder> by lazy {
+            tree?.let { t -> collectPlaceholders(t, path) }.orEmpty()
         }
     }
 
-    /** Placeholder position/size inherited from a slide's layout, keyed by the
-     *  <p:ph> type+idx a shape declares. Only geometry is inherited (a shape with
-     *  no xfrm of its own would otherwise vanish); text always comes from the
-     *  slide, never from the layout's placeholder prompt text. */
-    private class PlaceholderGeometry(
-        private val byTypeAndIdx: Map<String, Box>,
-        private val byType: Map<String, Box>
-    ) {
-        fun boxFor(type: String, idx: String?): Box? =
-            idx?.let { byTypeAndIdx["$type|$it"] } ?: byType[type]
-
-        companion object {
-            val EMPTY = PlaceholderGeometry(emptyMap(), emptyMap())
-        }
-    }
-
-    /** One level's worth of inherited run/paragraph defaults. Every field is nullable
-     *  because "not specified at this level" and "specified as off" are different —
-     *  the former keeps looking further up the chain, in [TextStyles.stylesFor]. */
-    private data class LevelStyle(
-        val sizePt: Float? = null,
-        val bold: Boolean? = null,
-        val italic: Boolean? = null,
-        val underline: Boolean? = null,
-        val colorArgb: Int? = null,
-        val align: HAlign? = null,
-        val bulletChar: String? = null,
-        val noBullet: Boolean = false
-    ) {
-        /** Layout-level values win; only what the layout leaves unset falls through
-         *  to the master's style for the same indent level. */
-        fun overlaidOn(master: LevelStyle): LevelStyle = LevelStyle(
-            sizePt ?: master.sizePt, bold ?: master.bold, italic ?: master.italic,
-            underline ?: master.underline, colorArgb ?: master.colorArgb,
-            align ?: master.align, bulletChar ?: master.bulletChar, noBullet || master.noBullet
-        )
-    }
-
-    /** Resolves the run/paragraph defaults a placeholder's text should use when its
-     *  own <a:rPr>/<a:pPr> leaves something unset — the layout's copy of that exact
-     *  placeholder first, the master's title/body/other style as the fallback. */
-    private class TextStyles(
-        private val layoutPlaceholderStyles: Map<String, Map<Int, LevelStyle>>,
-        private val masterTitleStyle: Map<Int, LevelStyle>,
-        private val masterBodyStyle: Map<Int, LevelStyle>,
-        private val masterOtherStyle: Map<Int, LevelStyle>
-    ) {
-        fun stylesFor(phType: String?, idx: String?): Map<Int, LevelStyle> {
-            val layoutStyle = idx?.let { layoutPlaceholderStyles["$phType|$it"] } ?: phType?.let { layoutPlaceholderStyles[it] }
-            val masterStyle = when (phType) {
-                "title", "ctrTitle" -> masterTitleStyle
-                null -> masterOtherStyle
-                else -> masterBodyStyle
-            }
-            val levels = (layoutStyle?.keys.orEmpty() + masterStyle.keys)
-            return levels.associateWith { lvl -> (layoutStyle?.get(lvl) ?: LevelStyle()).overlaidOn(masterStyle[lvl] ?: LevelStyle()) }
-        }
-
-        companion object {
-            val EMPTY = TextStyles(emptyMap(), emptyMap(), emptyMap(), emptyMap())
-        }
-    }
-
-    /** Everything a slide inherits through slide -> layout -> master -> theme,
-     *  resolved once so the rest of parsing only ever reads from it. */
+    /** Everything one slide inherits, resolved for its color map. */
     private class SlideContext(
+        val zip: ZipFile,
         val theme: Theme,
-        val placeholders: PlaceholderGeometry,
-        val textStyles: TextStyles,
-        val backgroundElements: List<Element>
+        val layout: Part?,
+        val master: Part?,
+        val titleStyle: Map<Int, LevelStyle>,
+        val bodyStyle: Map<Int, LevelStyle>,
+        val otherStyle: Map<Int, LevelStyle>,
+        val defaultStyle: Map<Int, LevelStyle>,
+        val tableStyles: Map<String, DomElement>
     ) {
-        companion object {
-            val EMPTY = SlideContext(Theme.EMPTY, PlaceholderGeometry.EMPTY, TextStyles.EMPTY, emptyList())
+        private val relsCache = HashMap<String, Map<String, String>>()
+        fun rels(part: String): Map<String, String> = relsCache.getOrPut(part) { zip.rels(part) }
+
+        /** The layout and master placeholders a slide placeholder inherits from, nearest first. */
+        fun inherited(type: String, idx: String?): List<Placeholder> {
+            val fromLayout = layout?.placeholders?.let { list ->
+                idx?.let { i -> list.firstOrNull { it.idx == i } } ?: list.firstOrNull { it.type == type }
+                    ?: list.firstOrNull { masterType(it.type) == masterType(type) && type != "obj" }
+            }
+            val fromMaster = master?.placeholders?.firstOrNull { it.type == masterType(fromLayout?.type ?: type) }
+            return listOfNotNull(fromLayout, fromMaster)
+        }
+
+        fun categoryStyle(type: String?): Map<Int, LevelStyle> = when (type) {
+            null -> defaultStyle
+            "title", "ctrTitle" -> titleStyle
+            "dt", "ftr", "sldNum", "hdr" -> otherStyle
+            else -> bodyStyle
         }
     }
 
@@ -139,20 +84,29 @@ internal object PptxParser {
         val presentation = zip.xml("ppt/presentation.xml")
             ?: throw ParseException("not a .pptx: ppt/presentation.xml is missing")
 
-        val size = presentation.first(P, "sldSz")
+        val size = presentation.first(NS_P, "sldSz")
         val widthEmu = size?.getAttribute("cx")?.toLongOrNull() ?: 9144000L
         val heightEmu = size?.getAttribute("cy")?.toLongOrNull() ?: 6858000L
 
         // Slide order lives in presentation.xml as relationship ids, not as file names:
         // slide7.xml can perfectly well be the second slide shown.
         val presRels = zip.rels("ppt/presentation.xml")
-        val slidePaths = presentation.descendants(P, "sldId").mapNotNull { node ->
-            presRels[node.getAttributeNS(R, "id")]?.let { resolve("ppt", it) }
+        val slidePaths = presentation.descendants(NS_P, "sldId").mapNotNull { presRels[it.getAttributeNS(NS_R, "id")] }
+        val defaultTextStyle = presentation.first(NS_P, "defaultTextStyle")
+        val tableStyles = zip.xml("ppt/tableStyles.xml")?.documentElement?.all(NS_A, "tblStyle").orEmpty()
+            .associateBy { it.getAttribute("styleId") }
+
+        val parts = HashMap<String, Part?>()
+        fun part(path: String?): Part? = path?.let { p ->
+            parts.getOrPut(p) { zip.xml(p)?.let { Part(p, it, zip.rels(p)) } }
         }
 
-        val slides = slidePaths.map { path ->
+        val slides = slidePaths.mapNotNull { path ->
+            val doc = zip.xml(path) ?: return@mapNotNull Slide(null, emptyList())
+            // Hidden slides are left out, as PowerPoint's own PDF export does.
+            if (doc.documentElement.getAttribute("show") == "0") return@mapNotNull null
             try {
-                parseSlide(zip, path)
+                parseSlide(zip, path, doc, widthEmu, heightEmu, ::part, defaultTextStyle, tableStyles)
             } catch (e: Exception) {
                 // One unreadable slide should cost one slide, not the whole deck.
                 Slide(backgroundArgb = null, elements = emptyList())
@@ -161,551 +115,385 @@ internal object PptxParser {
         Deck(widthEmu, heightEmu, slides)
     }
 
-    private fun parseSlide(zip: ZipFile, path: String): Slide {
-        val doc = zip.xml(path) ?: return Slide(null, emptyList())
-        val rels = zip.rels(path)
-        val dir = path.substringBeforeLast('/')
-        val ctx = loadSlideContext(zip, path, rels)
+    private fun parseSlide(
+        zip: ZipFile, path: String, doc: Document, widthEmu: Long, heightEmu: Long,
+        part: (String?) -> Part?, defaultTextStyle: DomElement?, tableStyles: Map<String, DomElement>
+    ): Slide {
+        val slide = Part(path, doc, zip.rels(path))
+        val layout = part(slide.rels.values.firstOrNull { "slideLayout" in it })
+        val master = part(layout?.rels?.values?.firstOrNull { "slideMaster" in it })
+        val themePath = master?.rels?.values?.firstOrNull { "/theme" in it }
 
-        val tree = doc.first(P, "cSld")?.first(P, "spTree")
-        val ownElements = tree?.let {
-            parseShapeTree(it, rels, dir, Box(0, 0, 0, 0), ctx, skipPlaceholders = false)
-        } ?: emptyList()
-
-        // The slide background is a single color in the model; a gradient one is
-        // approximated by its first stop rather than dropped to white.
-        val background = doc.first(P, "bg")?.first(P, "bgPr")?.let { bgPr ->
-            solidFill(bgPr, ctx.theme) ?: gradientFill(bgPr, ctx.theme)?.colors?.firstOrNull()
+        // Color map: the master's, unless the layout or slide overrides it.
+        var colorMap = Theme.colorMapOf(master?.root?.child(NS_P, "clrMap")) ?: Theme.DEFAULT_MAP
+        for (p in listOfNotNull(layout, slide)) {
+            Theme.colorMapOf(p.root.child(NS_P, "clrMapOvr")?.child(NS_A, "overrideClrMapping"))?.let { colorMap = it }
         }
-        return Slide(background, ctx.backgroundElements + ownElements)
-    }
+        val theme = (themePath?.let { Theme.load(zip, it) } ?: Theme.EMPTY).withColorMap(colorMap)
 
-    /**
-     * Resolves the full inheritance chain for one slide: theme colors, placeholder
-     * positions, text style defaults, and the master/layout's own decoration (a
-     * logo, a rule under the title, page furniture) that is not part of the slide's
-     * own XML at all but is still part of what the slide looks like.
-     */
-    private fun loadSlideContext(zip: ZipFile, slidePath: String, slideRels: Map<String, String>): SlideContext {
-        val layoutPath = slideRels.values.firstOrNull { it.contains("slideLayout") }
-            ?.let { resolve(slidePath.substringBeforeLast('/'), it) } ?: return SlideContext.EMPTY
-        val layoutDoc = zip.xml(layoutPath) ?: return SlideContext.EMPTY
-        val layoutRels = zip.rels(layoutPath)
-
-        val masterPath = layoutRels.values.firstOrNull { it.contains("slideMaster") }
-            ?.let { resolve(layoutPath.substringBeforeLast('/'), it) } ?: return SlideContext.EMPTY
-        val masterDoc = zip.xml(masterPath) ?: return SlideContext.EMPTY
-        val masterRels = zip.rels(masterPath)
-
-        val themePath = masterRels.values.firstOrNull { it.contains("theme") }
-            ?.let { resolve(masterPath.substringBeforeLast('/'), it) }
-        val theme = themePath?.let { loadTheme(zip, it) } ?: Theme.EMPTY
-
-        val placeholders = loadPlaceholderGeometry(layoutDoc)
-        val textStyles = loadTextStyles(layoutDoc, masterDoc, theme)
-
-        // A slide can hide the master's own shapes (<p:sld showMasterSp="0">) while
-        // still showing the layout's; there is no equivalent switch for the layout.
-        val showMasterShapes = zip.xml(slidePath)?.documentElement?.getAttribute("showMasterSp") != "0"
-        val masterDir = masterPath.substringBeforeLast('/')
-        val layoutDir = layoutPath.substringBeforeLast('/')
-        val masterBg = if (showMasterShapes) {
-            masterDoc.first(P, "cSld")?.first(P, "spTree")?.let {
-                parseShapeTree(it, masterRels, masterDir, Box(0, 0, 0, 0), SlideContext(theme, PlaceholderGeometry.EMPTY, TextStyles.EMPTY, emptyList()), skipPlaceholders = true)
-            }.orEmpty()
-        } else emptyList()
-        val layoutBg = layoutDoc.first(P, "cSld")?.first(P, "spTree")?.let {
-            parseShapeTree(it, layoutRels, layoutDir, Box(0, 0, 0, 0), SlideContext(theme, PlaceholderGeometry.EMPTY, TextStyles.EMPTY, emptyList()), skipPlaceholders = true)
-        }.orEmpty()
-
-        return SlideContext(theme, placeholders, textStyles, masterBg + layoutBg)
-    }
-
-    private fun loadTheme(zip: ZipFile, themePath: String): Theme {
-        val clrScheme = zip.xml(themePath)?.first(A, "themeElements")?.first(A, "clrScheme") ?: return Theme.EMPTY
-        val colors = mutableMapOf<String, Int>()
-        for (slot in clrScheme.children()) {
-            val name = slot.localName ?: continue
-            val srgb = slot.child(A, "srgbClr")?.getAttribute("val")?.ifBlank { null }
-                ?: slot.child(A, "sysClr")?.getAttribute("lastClr")?.ifBlank { null }
-                ?: continue
-            srgb.toIntOrNull(16)?.let { colors[name] = (0xFF shl 24) or it }
-        }
-        return Theme(colors)
-    }
-
-    /** Reads the slide's layout and maps each declared placeholder to its position,
-     *  so a slide shape that omits its own <a:xfrm> (very common for title/body
-     *  placeholders using a layout's default position) can still be placed. */
-    private fun loadPlaceholderGeometry(layoutDoc: Document): PlaceholderGeometry {
-        val byTypeAndIdx = mutableMapOf<String, Box>()
-        val byType = mutableMapOf<String, Box>()
-        val tree = layoutDoc.first(P, "cSld")?.first(P, "spTree") ?: return PlaceholderGeometry.EMPTY
-        for (sp in tree.all(P, "sp")) {
-            val ph = sp.first(P, "nvSpPr")?.first(P, "nvPr")?.first(P, "ph") ?: continue
-            val box = sp.first(P, "spPr")?.let { boxOf(it) } ?: continue
-            val type = ph.getAttribute("type").ifBlank { "body" }
-            val idx = ph.getAttribute("idx").ifBlank { null }
-            if (idx != null) byTypeAndIdx["$type|$idx"] = box
-            byType.putIfAbsent(type, box)
-        }
-        return PlaceholderGeometry(byTypeAndIdx, byType)
-    }
-
-    private fun loadTextStyles(layoutDoc: Document, masterDoc: Document, theme: Theme): TextStyles {
-        val layoutPlaceholderStyles = mutableMapOf<String, Map<Int, LevelStyle>>()
-        val layoutTree = layoutDoc.first(P, "cSld")?.first(P, "spTree")
-        for (sp in layoutTree?.all(P, "sp").orEmpty()) {
-            val ph = sp.first(P, "nvSpPr")?.first(P, "nvPr")?.first(P, "ph") ?: continue
-            val lstStyle = sp.first(P, "txBody")?.first(A, "lstStyle") ?: continue
-            val levels = parseLevelStyles(lstStyle, theme)
-            if (levels.isEmpty()) continue
-            val type = ph.getAttribute("type").ifBlank { "body" }
-            val idx = ph.getAttribute("idx").ifBlank { null }
-            if (idx != null) layoutPlaceholderStyles["$type|$idx"] = levels
-            layoutPlaceholderStyles.putIfAbsent(type, levels)
-        }
-
-        val txStyles = masterDoc.first(P, "txStyles")
-        return TextStyles(
-            layoutPlaceholderStyles,
-            masterTitleStyle = txStyles?.first(P, "titleStyle")?.let { parseLevelStyles(it, theme) }.orEmpty(),
-            masterBodyStyle = txStyles?.first(P, "bodyStyle")?.let { parseLevelStyles(it, theme) }.orEmpty(),
-            masterOtherStyle = txStyles?.first(P, "otherStyle")?.let { parseLevelStyles(it, theme) }.orEmpty()
+        val txStyles = master?.root?.child(NS_P, "txStyles")
+        val ctx = SlideContext(
+            zip, theme, layout, master,
+            titleStyle = theme.levelStyles(txStyles?.child(NS_P, "titleStyle")),
+            bodyStyle = theme.levelStyles(txStyles?.child(NS_P, "bodyStyle")),
+            otherStyle = theme.levelStyles(txStyles?.child(NS_P, "otherStyle")),
+            defaultStyle = theme.levelStyles(defaultTextStyle),
+            tableStyles = tableStyles
         )
-    }
 
-    /** Reads <a:lvl1pPr>..<a:lvl9pPr> (indent levels 0..8) from a <p:titleStyle>,
-     *  <p:bodyStyle>, <p:otherStyle>, or a placeholder's own <a:lstStyle>. */
-    private fun parseLevelStyles(container: DomElement, theme: Theme): Map<Int, LevelStyle> {
-        val out = mutableMapOf<Int, LevelStyle>()
-        for (level in 1..9) {
-            val lvlNode = container.child(A, "lvl${level}pPr") ?: continue
-            val defRPr = lvlNode.child(A, "defRPr")
-            out[level - 1] = LevelStyle(
-                sizePt = defRPr?.getAttribute("sz")?.toLongOrNull()?.let { it / 100f },
-                bold = defRPr?.getAttribute("b")?.ifBlank { null }?.let { it == "1" },
-                italic = defRPr?.getAttribute("i")?.ifBlank { null }?.let { it == "1" },
-                underline = defRPr?.getAttribute("u")?.ifBlank { null }?.let { it != "none" },
-                colorArgb = defRPr?.let { solidFill(it, theme) },
-                align = when (lvlNode.getAttribute("algn")) {
-                    "ctr" -> HAlign.CENTER; "r" -> HAlign.RIGHT; "just" -> HAlign.JUSTIFY; "l" -> HAlign.LEFT
-                    else -> null
-                },
-                bulletChar = lvlNode.child(A, "buChar")?.getAttribute("char"),
-                noBullet = lvlNode.child(A, "buNone") != null
-            )
+        val elements = mutableListOf<Item>()
+        var backgroundArgb: Int? = null
+        // The background comes from the nearest part that declares one.
+        val bg = listOfNotNull(slide, layout, master).firstNotNullOfOrNull { p ->
+            p.root.child(NS_P, "cSld")?.child(NS_P, "bg")?.let { bg ->
+                bg.child(NS_P, "bgPr")?.let { theme.fillIn(it, part = p.path) }
+                    ?: bg.child(NS_P, "bgRef")?.let { theme.fillFromRef(it, part = p.path) }
+            }
         }
-        return out
+        val full = Box(0, 0, widthEmu, heightEmu)
+        when (bg) {
+            is Fill.Solid -> backgroundArgb = bg.argb
+            is Fill.Shaded -> elements += Item.Shape(full, "rect", null, null, 0, null, gradient = bg.gradient)
+            is Fill.Picture -> ctx.rels(bg.part)[bg.embedId]?.let { elements += Item.Picture(full, imageEntry = it) }
+            else -> {}
+        }
+
+        // "Hide background graphics" on a slide hides both the layout's and the
+        // master's own shapes; a layout can hide just the master's.
+        val showBackgroundShapes = slide.root.getAttribute("showMasterSp") != "0"
+        val showMasterShapes = showBackgroundShapes && layout?.root?.getAttribute("showMasterSp") != "0"
+        if (showMasterShapes && master != null) master.tree?.let { elements += shapeTree(it, master.path, ctx, decoration = true) }
+        if (showBackgroundShapes && layout != null) layout.tree?.let { elements += shapeTree(it, layout.path, ctx, decoration = true) }
+        slide.tree?.let { elements += shapeTree(it, path, ctx, decoration = false) }
+        return Slide(backgroundArgb, elements)
     }
 
     /**
-     * Walks a shape tree. Groups nest, and a group applies its own transform to the
-     * children, so this recurses rather than iterating one level.
-     *
-     * [skipPlaceholders] is true when walking a master or layout for its background
-     * decoration: a placeholder shape there is a "click to add title"-style prompt
-     * that is never itself shown, only ever overridden by the slide, so it must not
-     * be drawn as if it were content.
+     * Walks a shape tree. Groups nest and transform their children, so this recurses.
+     * [decoration] is true for a master or layout: its placeholders are "click to add
+     * title" prompts that are never shown themselves, only inherited from.
      */
-    private fun parseShapeTree(
-        tree: DomElement,
-        rels: Map<String, String>,
-        dir: String,
-        offset: Box,
-        ctx: SlideContext,
-        skipPlaceholders: Boolean
-    ): List<Element> {
-        val out = mutableListOf<Element>()
+    private fun shapeTree(tree: DomElement, part: String, ctx: SlideContext, decoration: Boolean): List<Item> {
+        val out = mutableListOf<Item>()
         for (child in tree.children()) {
             when (child.localName) {
-                "sp" -> {
-                    val isPlaceholder = child.first(P, "nvSpPr")?.first(P, "nvPr")?.first(P, "ph") != null
-                    if (!(skipPlaceholders && isPlaceholder)) {
-                        parseShape(child, offset, ctx)?.let { out += it }
-                    }
+                "sp", "cxnSp" -> {
+                    val isPlaceholder = placeholderOf(child) != null
+                    if (!(decoration && isPlaceholder)) out += shape(child, NS_P, part, ctx)
                 }
-                "pic" -> parsePicture(child, rels, dir, offset)?.let { out += it }
-                "graphicFrame" -> parseGraphicFrame(child, offset, ctx.theme)?.let { out += it }
-                "grpSp" -> out += parseGroup(child, rels, dir, offset, ctx, skipPlaceholders)
+                "pic" -> picture(child, part, ctx)?.let { out += it }
+                "graphicFrame" -> out += graphicFrame(child, part, ctx)
+                "grpSp" -> out += group(child, part, ctx, decoration)
+                // Newer content (equations, some 3-D models) comes with a fallback
+                // older readers understand, usually a picture of it.
+                "AlternateContent" -> {
+                    val branch = child.child(NS_MC, "Fallback")?.takeIf { it.children().isNotEmpty() }
+                        ?: child.child(NS_MC, "Choice")
+                    branch?.let { out += shapeTree(it, part, ctx, decoration) }
+                }
             }
         }
         return out
     }
 
     /**
-     * A group has both a child-space rectangle (chOff/chExt) and a placed rectangle
-     * (off/ext); children are expressed in child space and have to be mapped onto the
-     * placed one. Ignoring that puts every grouped shape in the wrong place.
+     * A group has a child-space rectangle (chOff/chExt) and a placed rectangle
+     * (off/ext); its children are in child space and are mapped onto the placed one.
      */
-    private fun parseGroup(
-        node: DomElement,
-        rels: Map<String, String>,
-        dir: String,
-        offset: Box,
-        ctx: SlideContext,
-        skipPlaceholders: Boolean
-    ): List<Element> {
-        val xfrm = node.first(P, "grpSpPr")?.first(A, "xfrm")
-        val off = xfrm?.first(A, "off")
-        val ext = xfrm?.first(A, "ext")
-        val chOff = xfrm?.first(A, "chOff")
-        val chExt = xfrm?.first(A, "chExt")
-
-        val children = parseShapeTree(node, rels, dir, Box(0, 0, 0, 0), ctx, skipPlaceholders)
-        if (off == null || ext == null || chOff == null || chExt == null) {
-            return children.map { it.translated(offset.x, offset.y) }
-        }
-
-        val gx = off.long("x"); val gy = off.long("y")
-        val gw = ext.long("cx"); val gh = ext.long("cy")
-        val cx = chOff.long("x"); val cy = chOff.long("y")
-        val cw = chExt.long("cx").coerceAtLeast(1)
-        val ch = chExt.long("cy").coerceAtLeast(1)
-        val sx = gw.toDouble() / cw
-        val sy = gh.toDouble() / ch
-
-        return children.map { element ->
-            val b = element.box
-            element.withBox(
-                Box(
-                    x = offset.x + gx + ((b.x - cx) * sx).toLong(),
-                    y = offset.y + gy + ((b.y - cy) * sy).toLong(),
-                    w = (b.w * sx).toLong(),
-                    h = (b.h * sy).toLong()
-                )
-            )
-        }
+    private fun group(node: DomElement, part: String, ctx: SlideContext, decoration: Boolean): List<Item> {
+        val children = shapeTree(node, part, ctx, decoration)
+        val xfrm = node.child(NS_P, "grpSpPr")?.child(NS_A, "xfrm") ?: return children
+        val off = xfrm.child(NS_A, "off"); val ext = xfrm.child(NS_A, "ext")
+        val chOff = xfrm.child(NS_A, "chOff"); val chExt = xfrm.child(NS_A, "chExt")
+        if (off == null || ext == null || chOff == null || chExt == null) return children
+        val sx = ext.long("cx").toDouble() / chExt.long("cx").coerceAtLeast(1)
+        val sy = ext.long("cy").toDouble() / chExt.long("cy").coerceAtLeast(1)
+        return children.map { it.mapped(chOff.long("x"), chOff.long("y"), off.long("x"), off.long("y"), sx, sy) }
     }
 
-    private fun parseShape(node: DomElement, offset: Box, ctx: SlideContext): Element.Shape? {
-        val spPr = node.first(P, "spPr") ?: return null
-        val ph = node.first(P, "nvSpPr")?.first(P, "nvPr")?.first(P, "ph")
-        val phType = ph?.getAttribute("type")?.ifBlank { "body" }
-        val phIdx = ph?.getAttribute("idx")?.ifBlank { null }
+    private fun placeholderOf(node: DomElement): DomElement? =
+        node.children().firstOrNull { it.localName?.startsWith("nv") == true }?.child(NS_P, "nvPr")?.child(NS_P, "ph")
 
-        // Most placeholders (title, body, subtitle...) carry no <a:xfrm> of their own
-        // and rely entirely on the layout's position; only a shape with neither its
-        // own geometry nor an inherited one is truly unplaceable.
-        val box = boxOf(spPr) ?: phType?.let { ctx.placeholders.boxFor(it, phIdx) } ?: return null
-        val geometry = spPr.first(A, "prstGeom")?.getAttribute("prst")
-        val fill = solidFill(spPr, ctx.theme)
-        val gradient = if (fill == null) gradientFill(spPr, ctx.theme) else null
-        val line = spPr.first(A, "ln")
-        return Element.Shape(
-            box = box.translate(offset),
-            geometry = geometry,
-            fillArgb = fill,
-            gradient = gradient,
-            strokeArgb = line?.let { solidFill(it, ctx.theme) },
-            // <a:ln> with no "w" attribute means "use the default weight", not "no
-            // border" — a very common way to write a plain hairline outline. Only the
-            // complete absence of <a:ln> should mean zero width.
-            strokeWidthEmu = line?.let { it.getAttribute("w").toLongOrNull() ?: DEFAULT_LINE_WIDTH_EMU } ?: 0L,
-            text = node.first(P, "txBody")?.let { textBody(it, ctx.theme, ctx.textStyles.stylesFor(phType, phIdx)) },
-            rotation = rotationOf(spPr)
+    /**
+     * A shape or connector. [ns] is the namespace of its own wrapper elements: p for
+     * slides, dsp for SmartArt drawings (whose children are otherwise DrawingML).
+     */
+    private fun shape(node: DomElement, ns: String, part: String, ctx: SlideContext, origin: Box? = null): List<Item> {
+        val theme = ctx.theme
+        val spPr = node.child(ns, "spPr")
+        val ph = if (ns == NS_P) placeholderOf(node) else null
+        val phType = ph?.let { it.attr("type") ?: "obj" }
+        val phIdx = ph?.attr("idx")
+        val inherited = if (phType != null) ctx.inherited(phType, phIdx) else emptyList()
+
+        // Most placeholders carry no <a:xfrm> and take the layout's (or master's) position.
+        val box = (spPr?.let { boxOf(it) } ?: inherited.firstNotNullOfOrNull { it.spPr?.let(::boxOf) } ?: return emptyList())
+            .let { if (origin != null) Box(it.x + origin.x, it.y + origin.y, it.w, it.h) else it }
+        val xfrm = spPr?.child(NS_A, "xfrm")
+        val geomSource = spPr?.takeIf { it.child(NS_A, "prstGeom") != null || it.child(NS_A, "custGeom") != null }
+            ?: inherited.firstNotNullOfOrNull { p -> p.spPr?.takeIf { it.child(NS_A, "prstGeom") != null || it.child(NS_A, "custGeom") != null } }
+        val geom = geomSource?.child(NS_A, "custGeom")?.let { Geometry.custom(it, box.w, box.h) }
+            ?: geomSource?.child(NS_A, "prstGeom")?.let { Geometry.preset(it.getAttribute("prst"), it.child(NS_A, "avLst"), box.w, box.h) }
+            ?: Geometry.Result(if (node.localName == "cxnSp") "line" else "rect", null)
+
+        val style = node.child(ns, "style") ?: inherited.firstNotNullOfOrNull { it.style }
+        val fill = theme.fillIn(spPr, part = part)
+            ?: inherited.firstNotNullOfOrNull { theme.fillIn(it.spPr, part = it.part) }
+            ?: theme.fillFromRef(style?.child(NS_A, "fillRef"), part)
+            ?: Fill.None
+
+        val ln = spPr?.child(NS_A, "ln")
+        val lnSources = listOfNotNull(ln) + inherited.mapNotNull { it.spPr?.child(NS_A, "ln") }
+        val lnRef = style?.child(NS_A, "lnRef")
+        val refColor = theme.colorIn(lnRef)
+        val refLine = lnRef?.getAttribute("idx")?.toIntOrNull()?.let { theme.lineStyle(it) }
+        val lnFill = lnSources.firstNotNullOfOrNull { theme.fillIn(it) }
+            ?: refLine?.let { theme.fillIn(it, refColor) }
+            ?: refColor?.let { Fill.Solid(it) }
+        val strokeColor = (lnFill as? Fill.Solid)?.argb ?: (lnFill as? Fill.Shaded)?.gradient?.colors?.first()
+        val strokeWidth = lnSources.firstNotNullOfOrNull { it.longOrNull("w") } ?: refLine?.longOrNull("w") ?: DEFAULT_LINE_WIDTH_EMU
+        val dash = lnSources.firstNotNullOfOrNull { it.child(NS_A, "prstDash")?.attr("val") } ?: refLine?.child(NS_A, "prstDash")?.attr("val")
+        fun arrow(end: String) = (lnSources + listOfNotNull(refLine)).firstNotNullOfOrNull { it.child(NS_A, end)?.attr("type") }
+            ?.let { it != "none" } ?: false
+
+        val fontRef = style?.child(NS_A, "fontRef")
+        val textNode = node.child(ns, "txBody")
+        val chain = if (phType != null) {
+            StyleChain(inherited.map { theme.levelStyles(it.txBody?.child(NS_A, "lstStyle")) } + listOf(ctx.categoryStyle(phType)))
+        } else StyleChain.of(ctx.defaultStyle, ctx.otherStyle)
+        val body = inherited.foldRight(BodyProps()) { p, acc -> BodyProps.of(p.txBody?.child(NS_A, "bodyPr")).overlaidOn(acc) }
+        val text = textNode?.let { theme.textBody(it, chain, body, theme.colorIn(fontRef)) }
+            ?.takeIf { t -> t.paragraphs.any { !it.isEmpty } }
+
+        // SmartArt drawings give the text its own rectangle.
+        val txXfrm = node.child(ns, "txXfrm")?.let { boxOf(it, direct = true) }
+            ?.let { if (origin != null) Box(it.x + origin.x, it.y + origin.y, it.w, it.h) else it }
+
+        val out = mutableListOf<Item>()
+        if (fill is Fill.Picture) {
+            ctx.rels(fill.part)[fill.embedId]?.let { out += Item.Picture(box, imageEntry = it, rotation = rotationOf(spPr)) }
+        }
+        out += Item.Shape(
+            box = box,
+            geometry = geom.geometry,
+            fillArgb = if (geom.open) null else (fill as? Fill.Solid)?.argb,
+            strokeArgb = strokeColor,
+            strokeWidthEmu = if (strokeColor != null) strokeWidth else 0L,
+            text = if (txXfrm == null) text else null,
+            rotation = rotationOf(spPr),
+            flipH = xfrm?.getAttribute("flipH") == "1",
+            flipV = xfrm?.getAttribute("flipV") == "1",
+            headArrow = arrow("headEnd"),
+            tailArrow = arrow("tailEnd"),
+            dashed = dash != null && dash != "solid",
+            outline = geom.outline,
+            gradient = if (geom.open) null else (fill as? Fill.Shaded)?.gradient
         )
+        if (txXfrm != null && text != null) {
+            out += Item.Shape(txXfrm, null, null, null, 0, text, rotation = rotationOf(spPr))
+        }
+        return out
     }
 
-    private fun parsePicture(
-        node: DomElement,
-        rels: Map<String, String>,
-        dir: String,
-        offset: Box
-    ): Element.Picture? {
-        val spPr = node.first(P, "spPr") ?: return null
-        val box = boxOf(spPr) ?: return null
-        val embedId = node.first(P, "blipFill")?.first(A, "blip")?.getAttributeNS(R, "embed")
+    private fun picture(node: DomElement, part: String, ctx: SlideContext, frame: Box? = null): Item.Picture? {
+        val spPr = node.child(NS_P, "spPr")
+        val ph = placeholderOf(node)
+        val box = frame ?: spPr?.let { boxOf(it) }
+            ?: ph?.let { ctx.inherited(it.attr("type") ?: "obj", it.attr("idx")).firstNotNullOfOrNull { p -> p.spPr?.let(::boxOf) } }
             ?: return null
-        val target = rels[embedId] ?: return null
-        return Element.Picture(box = box.translate(offset), imageEntry = resolve(dir, target), rotation = rotationOf(spPr))
+        val blipFill = node.child(NS_P, "blipFill") ?: return null
+        val blip = blipFill.child(NS_A, "blip") ?: return null
+        // Office 365 icons can be SVG only, with no raster fallback in r:embed.
+        val embedId = blip.getAttributeNS(NS_R, "embed").ifBlank { null }
+            ?: blip.descendants(NS_ASVG, "svgBlip").firstOrNull()?.getAttributeNS(NS_R, "embed")?.ifBlank { null }
+            ?: return null
+        val target = ctx.rels(part)[embedId] ?: return null
+        // srcRect trims each edge by a fraction (in 1/1000 %); negative values pad.
+        val crop = blipFill.child(NS_A, "srcRect")?.let { r ->
+            fun f(a: String) = (r.longOrNull(a) ?: 0L) / 100000f
+            Crop(f("l"), f("t"), f("r"), f("b")).takeIf { it.left != 0f || it.top != 0f || it.right != 0f || it.bottom != 0f }
+        }
+        return Item.Picture(box = box, imageEntry = target, rotation = spPr?.let { rotationOf(it) } ?: 0f, crop = crop)
     }
 
-    private fun parseGraphicFrame(node: DomElement, offset: Box, theme: Theme): Element.Table? {
-        val xfrm = node.first(P, "xfrm") ?: return null
-        val off = xfrm.first(A, "off") ?: return null
-        val ext = xfrm.first(A, "ext") ?: return null
-        val box = Box(off.long("x"), off.long("y"), ext.long("cx"), ext.long("cy")).translate(offset)
+    private fun graphicFrame(node: DomElement, part: String, ctx: SlideContext): List<Item> {
+        val xfrm = node.child(NS_P, "xfrm") ?: return emptyList()
+        val off = xfrm.child(NS_A, "off") ?: return emptyList()
+        val ext = xfrm.child(NS_A, "ext") ?: return emptyList()
+        val box = Box(off.long("x"), off.long("y"), ext.long("cx"), ext.long("cy"))
+        val data = node.first(NS_A, "graphicData") ?: return emptyList()
 
-        val tbl = node.first(A, "graphic")?.first(A, "graphicData")?.first(A, "tbl") ?: return null
-        val grid = tbl.first(A, "tblGrid")?.all(A, "gridCol")?.map { it.long("w") } ?: return null
+        data.child(NS_A, "tbl")?.let { return listOfNotNull(table(it, box, ctx)) }
+        data.child(NS_DGM, "relIds")?.let { return smartArt(it, box, part, ctx) }
+        // An embedded OLE object (an Excel sheet, an equation) carries a preview picture.
+        data.descendants(NS_P, "pic").firstOrNull()?.let { pic -> return listOfNotNull(picture(pic, part, ctx, frame = box)) }
+        return emptyList()
+    }
 
+    /**
+     * SmartArt is stored as data plus layout rules, but PowerPoint also saves the
+     * shapes it drew (a "drawing" part, named from the data part's dataModelExt),
+     * in the frame's coordinate space. Those are drawn like ordinary shapes.
+     */
+    private fun smartArt(relIds: DomElement, frame: Box, part: String, ctx: SlideContext): List<Item> {
+        val rels = ctx.rels(part)
+        val dataPath = rels[relIds.getAttributeNS(NS_R, "dm")] ?: return emptyList()
+        val drawingId = ctx.zip.xml(dataPath)?.descendants(NS_DSP, "dataModelExt")?.firstOrNull()?.attr("relId")
+        val drawingPath = drawingId?.let { rels[it] }
+            ?: ctx.rels(dataPath).values.firstOrNull { "drawing" in it.substringAfterLast('/') }
+            ?: return emptyList()
+        val tree = ctx.zip.xml(drawingPath)?.first(NS_DSP, "spTree") ?: return emptyList()
+        val origin = Box(frame.x, frame.y, 0, 0)
+        val out = mutableListOf<Item>()
+        fun walk(t: DomElement) {
+            for (child in t.children()) when (child.localName) {
+                "sp" -> out += shape(child, NS_DSP, drawingPath, ctx, origin)
+                "grpSp" -> walk(child)
+            }
+        }
+        walk(tree)
+        return out
+    }
+
+    /**
+     * A table, with cell fills and text colors from its table style (tableStyles.xml,
+     * or PowerPoint's default "Medium Style 2 – Accent 1" when the style isn't in the
+     * file) unless a cell sets its own.
+     */
+    private fun table(tbl: DomElement, box: Box, ctx: SlideContext): Item.Table? {
+        val theme = ctx.theme
+        val grid = tbl.child(NS_A, "tblGrid")?.all(NS_A, "gridCol")?.map { it.long("w") } ?: return null
+        val tblPr = tbl.child(NS_A, "tblPr")
+        val styleId = tblPr?.child(NS_A, "tableStyleId")?.textContent?.trim()
+        val style = styleId?.let { ctx.tableStyles[it] } ?: if (styleId == null || styleId == DEFAULT_TABLE_STYLE) defaultTableStyle() else null
+        fun flag(name: String) = tblPr?.getAttribute(name) == "1"
+        val rowsXml = tbl.all(NS_A, "tr")
+        val lastRow = rowsXml.size - 1
+
+        fun parts(r: Int, c: Int, lastCol: Int): List<DomElement> {
+            style ?: return emptyList()
+            val names = mutableListOf<String>()
+            if (flag("firstRow") && r == 0) names += "firstRow"
+            if (flag("lastRow") && r == lastRow) names += "lastRow"
+            if (flag("firstCol") && c == 0) names += "firstCol"
+            if (flag("lastCol") && c == lastCol) names += "lastCol"
+            if (flag("bandRow")) {
+                val band = r - if (flag("firstRow")) 1 else 0
+                if (band >= 0) names += if (band % 2 == 0) "band1H" else "band2H"
+            }
+            if (flag("bandCol")) names += if ((c - if (flag("firstCol")) 1 else 0) % 2 == 0) "band1V" else "band2V"
+            names += "wholeTbl"
+            return names.mapNotNull { style.child(NS_A, it) }
+        }
+
+        var gridArgb: Int? = null
         val rowHeights = mutableListOf<Long>()
-        val rows = mutableListOf<List<TableCell?>>()
-        for (tr in tbl.all(A, "tr")) {
+        val rows = rowsXml.mapIndexed { r, tr ->
             rowHeights += tr.long("h")
-            rows += tr.children().filter { it.localName == "tc" }.map { tc ->
+            val tcs = tr.all(NS_A, "tc")
+            tcs.mapIndexed { c, tc ->
                 // hMerge/vMerge mark the continuation cells of a merge; the spanning
                 // cell keeps its content and these are holes to skip when drawing.
-                if (tc.getAttribute("hMerge") == "1" || tc.getAttribute("vMerge") == "1") null
-                else TableCell(
-                    text = tc.first(A, "txBody")?.let { textBody(it, theme, emptyMap()) },
-                    fillArgb = tc.first(A, "tcPr")?.let { solidFill(it, theme) },
+                if (tc.getAttribute("hMerge") == "1" || tc.getAttribute("vMerge") == "1") return@mapIndexed null
+                val tcPr = tc.child(NS_A, "tcPr")
+                val styleParts = parts(r, c, tcs.size - 1)
+                val fill = theme.fillIn(tcPr) ?: styleParts.firstNotNullOfOrNull { p ->
+                    p.child(NS_A, "tcStyle")?.let { s -> theme.fillIn(s.child(NS_A, "fill")) ?: theme.fillFromRef(s.child(NS_A, "fillRef")) }
+                }
+                val txStyle = styleParts.mapNotNull { it.child(NS_A, "tcTxStyle") }
+                val textStyle = LevelStyle(
+                    colorArgb = txStyle.firstNotNullOfOrNull { theme.colorIn(it) ?: theme.colorIn(it.child(NS_A, "fontRef")) },
+                    bold = txStyle.firstNotNullOfOrNull { it.attr("b") }?.let { it == "on" }
+                )
+                if (gridArgb == null) {
+                    gridArgb = listOf("lnB", "lnT", "lnL", "lnR").firstNotNullOfOrNull { tcPr?.child(NS_A, it) }
+                        ?.let { (theme.fillIn(it) as? Fill.Solid)?.argb }
+                        ?: styleParts.firstNotNullOfOrNull { p ->
+                            p.child(NS_A, "tcStyle")?.child(NS_A, "tcBdr")?.children()?.firstNotNullOfOrNull { b ->
+                                (theme.fillIn(b.child(NS_A, "ln")) as? Fill.Solid)?.argb
+                            }
+                        }
+                }
+                TableCell(
+                    text = tc.child(NS_A, "txBody")?.let {
+                        theme.textBody(it, StyleChain.of(mapOf(0 to textStyle), ctx.otherStyle), BodyProps(
+                            anchor = when (tcPr?.getAttribute("anchor")) {
+                                "ctr" -> io.github.baeseungwon1010.officecanvas.slide.VAnchor.MIDDLE
+                                "b" -> io.github.baeseungwon1010.officecanvas.slide.VAnchor.BOTTOM
+                                else -> null
+                            },
+                            insets = listOf(tcPr?.longOrNull("marL") ?: 91440, tcPr?.longOrNull("marT") ?: 45720,
+                                tcPr?.longOrNull("marR") ?: 91440, tcPr?.longOrNull("marB") ?: 45720)
+                        ))
+                    },
+                    fillArgb = (fill as? Fill.Solid)?.argb ?: (fill as? Fill.Shaded)?.gradient?.colors?.first(),
                     colSpan = tc.getAttribute("gridSpan").toIntOrNull() ?: 1,
                     rowSpan = tc.getAttribute("rowSpan").toIntOrNull() ?: 1
                 )
             }
         }
         if (rows.isEmpty()) return null
-        return Element.Table(box, grid, rowHeights, rows)
+        return Item.Table(box, grid, rowHeights, rows, gridArgb = gridArgb)
     }
 
-    private fun textBody(node: DomElement, theme: Theme, levelStyles: Map<Int, LevelStyle>): TextBody? {
-        val paragraphs = node.all(A, "p").map { paragraph(it, theme, levelStyles) }
-        if (paragraphs.isEmpty()) return null
-        val bodyPr = node.first(A, "bodyPr")
-        return TextBody(
-            paragraphs = paragraphs,
-            anchor = when (bodyPr?.getAttribute("anchor")) {
-                "ctr" -> VAnchor.MIDDLE
-                "b" -> VAnchor.BOTTOM
-                else -> VAnchor.TOP
-            },
-            insetLeftEmu = bodyPr?.longOrNull("lIns") ?: 91440,
-            insetTopEmu = bodyPr?.longOrNull("tIns") ?: 45720,
-            insetRightEmu = bodyPr?.longOrNull("rIns") ?: 91440,
-            insetBottomEmu = bodyPr?.longOrNull("bIns") ?: 45720,
-            autoFit = bodyPr?.first(A, "normAutofit") != null
-        )
+    private const val DEFAULT_TABLE_STYLE = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"
+
+    /** PowerPoint's default table style, which decks reference without storing it. */
+    private fun defaultTableStyle(): DomElement {
+        fun fill(color: String) = "<a:fill><a:solidFill>$color</a:solidFill></a:fill>"
+        val accent = "<a:schemeClr val=\"accent1\"/>"
+        fun tint(v: Int) = "<a:schemeClr val=\"accent1\"><a:tint val=\"$v\"/></a:schemeClr>"
+        val border = "<a:tcBdr><a:insideH><a:ln w=\"12700\"><a:solidFill><a:schemeClr val=\"lt1\"/></a:solidFill></a:ln></a:insideH></a:tcBdr>"
+        val xml = """<a:tblStyle xmlns:a="$NS_A" styleId="$DEFAULT_TABLE_STYLE">
+            <a:wholeTbl><a:tcTxStyle><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle>$border${fill(tint(20000))}</a:tcStyle></a:wholeTbl>
+            <a:band1H><a:tcStyle>${fill(tint(40000))}</a:tcStyle></a:band1H>
+            <a:band1V><a:tcStyle>${fill(tint(40000))}</a:tcStyle></a:band1V>
+            <a:lastCol><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:lastCol>
+            <a:firstCol><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:firstCol>
+            <a:lastRow><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:lastRow>
+            <a:firstRow><a:tcTxStyle b="on"><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle>${fill(accent)}</a:tcStyle></a:firstRow>
+            </a:tblStyle>"""
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+        return factory.newDocumentBuilder().parse(xml.byteInputStream()).documentElement
     }
 
-    private fun paragraph(node: DomElement, theme: Theme, levelStyles: Map<Int, LevelStyle>): Paragraph {
-        val pPr = node.first(A, "pPr")
-        val level = pPr?.getAttribute("lvl")?.toIntOrNull() ?: 0
-        val fallback = levelStyles[level] ?: LevelStyle()
-
-        val runs = node.children()
-            .filter { it.localName == "r" || it.localName == "br" }
-            .map { child ->
-                // A <a:br> is a hard line break inside the paragraph; carrying it as a
-                // run containing "\n" keeps the renderer from needing a second concept.
-                if (child.localName == "br") Run("\n") else run(child, theme, fallback)
-            }
-        return Paragraph(
-            runs = runs,
-            align = when (pPr?.getAttribute("algn")) {
-                "ctr" -> HAlign.CENTER
-                "r" -> HAlign.RIGHT
-                "just" -> HAlign.JUSTIFY
-                "l" -> HAlign.LEFT
-                else -> fallback.align ?: HAlign.LEFT
-            },
-            level = level,
-            bullet = bulletOf(pPr, fallback),
-            spaceBeforePt = spacingPt(pPr?.first(A, "spcBef")),
-            spaceAfterPt = spacingPt(pPr?.first(A, "spcAft")),
-            lineSpacingPercent = pPr?.first(A, "lnSpc")?.first(A, "spcPct")
-                ?.long("val")?.let { it / 1000f } ?: 100f
-        )
-    }
-
-    private fun run(node: DomElement, theme: Theme, fallback: LevelStyle): Run {
-        val rPr = node.first(A, "rPr")
-        return Run(
-            text = node.first(A, "t")?.textContent ?: "",
-            // Size is in hundredths of a point.
-            sizePt = rPr?.getAttribute("sz")?.toLongOrNull()?.let { it / 100f } ?: fallback.sizePt ?: 18f,
-            bold = rPr?.getAttribute("b")?.ifBlank { null }?.let { it == "1" } ?: fallback.bold ?: false,
-            italic = rPr?.getAttribute("i")?.ifBlank { null }?.let { it == "1" } ?: fallback.italic ?: false,
-            underline = rPr?.getAttribute("u")?.ifBlank { null }?.let { it != "none" } ?: fallback.underline ?: false,
-            colorArgb = rPr?.let { solidFill(it, theme) } ?: fallback.colorArgb ?: 0xFF000000.toInt(),
-            fontFamily = rPr?.first(A, "latin")?.getAttribute("typeface")?.ifBlank { null }
-        )
-    }
-
-    private fun bulletOf(pPr: DomElement?, fallback: LevelStyle): String? = when {
-        pPr?.first(A, "buNone") != null -> null
-        pPr?.first(A, "buChar") != null -> pPr.first(A, "buChar")?.getAttribute("char")
-        pPr?.first(A, "buAutoNum") != null -> "•"
-        // Nothing said either way at this level: fall through to what the layout or
-        // master declared for this indent level.
-        else -> if (fallback.noBullet) null else fallback.bulletChar
-    }
-
-    private fun spacingPt(node: DomElement?): Float =
-        node?.first(A, "spcPts")?.long("val")?.let { it / 100f } ?: 0f
-
-    /**
-     * Colour resolution: literal sRGB is read directly; a theme reference
-     * (<a:schemeClr val="tx1"/>, very common for anything using a default shape
-     * style — outlines especially) resolves through [theme]. What is still not
-     * handled is a <p:clrMapOvr> on the slide itself overriding the standard
-     * bg/tx -> lt/dk mapping, which is rare enough that [Theme.resolve]'s fixed
-     * mapping is a reasonable trade rather than plumbing it through everywhere.
-     */
-    private fun solidFill(parent: DomElement, theme: Theme): Int? {
-        // Direct children only. A shape with no fill of its own but an outline that has
-        // one would otherwise inherit its own border colour as its fill.
-        val fill = parent.child(A, "solidFill") ?: return null
-        return colorIn(fill, theme)
-    }
-
-    /** The color element (srgbClr or schemeClr, with an optional alpha) inside [holder]. */
-    private fun colorIn(holder: DomElement, theme: Theme): Int? {
-        val srgb = holder.child(A, "srgbClr")
-        val scheme = holder.child(A, "schemeClr")
-        val colorNode = srgb ?: scheme ?: return null
-
-        val rgb = if (srgb != null) {
-            srgb.getAttribute("val").takeIf { it.length == 6 }?.toIntOrNull(16) ?: return null
-        } else {
-            (theme.resolve(scheme!!.getAttribute("val")) ?: return null) and 0xFFFFFF
-        }
-        val alphaPercent = colorNode.child(A, "alpha")?.long("val")
-        val alpha = if (alphaPercent != null) (alphaPercent * 255 / 100000).toInt() else 255
-        return (alpha shl 24) or rgb
-    }
-
-    /**
-     * <a:gradFill>: stops in <a:gsLst> (pos in 1/1000 %), then either <a:lin ang>
-     * (60000ths of a degree, clockwise from left-to-right — the same convention as
-     * [Gradient.angleDeg]) or <a:path> (circle = radial, rect/shape = concentric
-     * rectangles) whose <a:fillToRect> insets put the center.
-     */
-    private fun gradientFill(parent: DomElement, theme: Theme): Gradient? {
-        val grad = parent.child(A, "gradFill") ?: return null
-        val stops = grad.child(A, "gsLst")?.all(A, "gs").orEmpty().mapNotNull { gs ->
-            colorIn(gs, theme)?.let { (gs.longOrNull("pos") ?: 0L) / 100000f to it }
-        }.sortedBy { it.first }
-        if (stops.isEmpty()) return null
-        if (stops.size == 1) return Gradient(listOf(stops[0].second, stops[0].second), listOf(0f, 1f), 0f)
-        val colors = stops.map { it.second }
-        val positions = stops.map { it.first.coerceIn(0f, 1f) }
-        val path = grad.child(A, "path")
-        if (path != null) {
-            val to = path.child(A, "fillToRect")
-            fun frac(attr: String) = (to?.longOrNull(attr) ?: 50000L) / 100000f
-            return Gradient(
-                colors, positions, 0f,
-                radial = true,
-                rectangular = path.getAttribute("path") != "circle",
-                centerX = (frac("l") + 1f - frac("r")) / 2f,
-                centerY = (frac("t") + 1f - frac("b")) / 2f
-            )
-        }
-        val angle = (grad.child(A, "lin")?.longOrNull("ang") ?: 0L) / 60000f
-        return Gradient(colors, positions, angle)
-    }
-
-    private fun boxOf(spPr: DomElement): Box? {
-        val xfrm = spPr.first(A, "xfrm") ?: return null
-        val off = xfrm.first(A, "off") ?: return null
-        val ext = xfrm.first(A, "ext") ?: return null
+    private fun boxOf(spPr: DomElement, direct: Boolean = false): Box? {
+        val xfrm = if (direct) spPr else spPr.child(NS_A, "xfrm") ?: return null
+        val off = xfrm.child(NS_A, "off") ?: return null
+        val ext = xfrm.child(NS_A, "ext") ?: return null
         return Box(off.long("x"), off.long("y"), ext.long("cx"), ext.long("cy"))
     }
 
     /** Rotation is stored in 60000ths of a degree. */
-    private fun rotationOf(spPr: DomElement): Float =
-        spPr.first(A, "xfrm")?.longOrNull("rot")?.let { it / 60000f } ?: 0f
+    private fun rotationOf(spPr: DomElement?): Float =
+        spPr?.child(NS_A, "xfrm")?.longOrNull("rot")?.let { it / 60000f } ?: 0f
 
-    // ---- zip / xml helpers -------------------------------------------------
-
-    private fun ZipFile.xml(path: String): Document? {
-        val entry = getEntry(path) ?: return null
-        return getInputStream(entry).use { stream ->
-            try {
-                secureDocumentBuilder().parse(stream)
-            } catch (e: Exception) {
-                null
+    private fun collectPlaceholders(tree: DomElement, part: String): List<Placeholder> {
+        val out = mutableListOf<Placeholder>()
+        for (child in tree.children()) {
+            when (child.localName) {
+                "sp", "pic", "graphicFrame" -> placeholderOf(child)?.let { ph ->
+                    out += Placeholder(ph.attr("type") ?: "obj", ph.attr("idx"), child, part)
+                }
+                "grpSp" -> out += collectPlaceholders(child, part)
             }
-        }
-    }
-
-    /**
-     * Relationship files map the r:id used inside a part to the file it points at.
-     * Targets with a TargetMode of External are dropped: they address something outside
-     * the package (an http:// image, say), and resolving one would turn opening a file
-     * into fetching a URL on the document's behalf.
-     */
-    private fun ZipFile.rels(partPath: String): Map<String, String> {
-        val dir = partPath.substringBeforeLast('/', "")
-        val name = partPath.substringAfterLast('/')
-        val relPath = if (dir.isEmpty()) "_rels/$name.rels" else "$dir/_rels/$name.rels"
-        val doc = xml(relPath) ?: return emptyMap()
-        return doc.documentElement.children()
-            .filter { it.getAttribute("TargetMode") != "External" }
-            .mapNotNull { rel ->
-                val id = rel.getAttribute("Id").ifBlank { return@mapNotNull null }
-                val target = rel.getAttribute("Target").ifBlank { return@mapNotNull null }
-                id to target
-            }.toMap()
-    }
-
-    /**
-     * XML parsing with every external-resource door shut. A .pptx is frequently a file
-     * someone else sent, and an entity reference is enough to turn parsing it into a
-     * file read or an outbound request.
-     */
-    private fun secureDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = true
-        isExpandEntityReferences = false
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-        setXIncludeAware(false)
-    }.newDocumentBuilder()
-
-    /** Resolves a relationship target, which may be relative ("../media/x.png"). */
-    private fun resolve(baseDir: String, target: String): String {
-        if (target.startsWith("/")) return target.removePrefix("/")
-        val parts = baseDir.split('/').toMutableList()
-        for (segment in target.split('/')) {
-            when (segment) {
-                "." , "" -> {}
-                ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.size - 1)
-                else -> parts += segment
-            }
-        }
-        return parts.joinToString("/")
-    }
-
-    private fun Node.children(): List<DomElement> {
-        val out = mutableListOf<DomElement>()
-        val list = childNodes
-        for (i in 0 until list.length) (list.item(i) as? DomElement)?.let { out += it }
-        return out
-    }
-
-    /** First descendant with this namespace and name, searched depth-first. */
-    private fun Node.first(ns: String, name: String): DomElement? {
-        for (child in children()) {
-            if (child.namespaceURI == ns && child.localName == name) return child
-            child.first(ns, name)?.let { return it }
-        }
-        return null
-    }
-
-    /** Direct children with this namespace and name — not descendants, so that a
-     *  paragraph inside a nested table does not get collected as the outer body's. */
-    private fun Node.all(ns: String, name: String): List<DomElement> =
-        children().filter { it.namespaceURI == ns && it.localName == name }
-
-    private fun Node.child(ns: String, name: String): DomElement? =
-        children().firstOrNull { it.namespaceURI == ns && it.localName == name }
-
-    /** Every descendant with this namespace and name, in document order. Needed where
-     *  the element sits inside a wrapper list (p:sldId lives under p:sldIdLst). */
-    private fun Node.descendants(ns: String, name: String): List<DomElement> {
-        val out = mutableListOf<DomElement>()
-        for (child in children()) {
-            if (child.namespaceURI == ns && child.localName == name) out += child
-            out += child.descendants(ns, name)
         }
         return out
     }
 
-    private fun DomElement.long(attr: String): Long = getAttribute(attr).toLongOrNull() ?: 0L
-    private fun DomElement.longOrNull(attr: String): Long? = getAttribute(attr).toLongOrNull()
+    /** The master only has title, body and the footer placeholders. */
+    private fun masterType(type: String): String = when (type) {
+        "title", "ctrTitle" -> "title"
+        "dt", "ftr", "sldNum", "hdr" -> type
+        else -> "body"
+    }
 
-    private fun Box.translate(by: Box) = Box(x + by.x, y + by.y, w, h)
-
-    private fun Element.translated(dx: Long, dy: Long): Element =
-        withBox(Box(box.x + dx, box.y + dy, box.w, box.h))
-
-    private fun Element.withBox(b: Box): Element = when (this) {
-        is Element.Shape -> copy(box = b)
-        is Element.Picture -> copy(box = b)
-        is Element.Table -> copy(box = b)
+    private fun Item.mapped(cx: Long, cy: Long, gx: Long, gy: Long, sx: Double, sy: Double): Item {
+        fun map(b: Box) = Box(gx + ((b.x - cx) * sx).toLong(), gy + ((b.y - cy) * sy).toLong(), (b.w * sx).toLong(), (b.h * sy).toLong())
+        return when (this) {
+            is Item.Shape -> copy(box = map(box))
+            is Item.Picture -> copy(box = map(box))
+            is Item.Table -> copy(box = map(box))
+        }
     }
 }

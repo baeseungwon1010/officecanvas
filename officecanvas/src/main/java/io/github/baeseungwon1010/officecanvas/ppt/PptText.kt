@@ -478,7 +478,7 @@ internal data class AutoNumber(val scheme: Int, val start: Int)
  * shallower one restarts it, while deeper (sub-item) paragraphs leave it alone.
  * Empty paragraphs show nothing and don't break the sequence.
  */
-private class NumberCounter {
+internal class NumberCounter {
     private val value = IntArray(5)
     private val scheme = IntArray(5) { -1 }
 
