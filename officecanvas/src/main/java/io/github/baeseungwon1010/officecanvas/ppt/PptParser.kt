@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.ppt
 
+import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.slide.Box
 import io.github.baeseungwon1010.officecanvas.slide.Deck
 import io.github.baeseungwon1010.officecanvas.slide.Element
@@ -84,7 +85,10 @@ internal object PptParser {
         )
 
         // Instance 0 lists the slides in order (1 = masters, 2 = notes pages).
+        // A slide listed twice is drawn once; a crafted list can repeat one costly
+        // slide many thousands of times.
         val entries = lists.firstOrNull { it.instance == 0 }?.let { readList(r, it) }.orEmpty()
+            .distinctBy { it.persistId }.take(Limits.MAX_PAGES)
         val slides = entries.mapIndexedNotNull { index, entry ->
             val slideRec = doc.persist[entry.persistId]?.let { r.record(it) }?.takeIf { it.type == RT.SLIDE }
                 ?: return@mapIndexedNotNull Slide(null, emptyList())
@@ -229,8 +233,8 @@ internal object PptParser {
         if (currentUser.size < 20) return emptyMap()
         var editOffset = cu.i32(16)
         val map = mutableMapOf<Int, Int>()
-        var guard = 10_000
-        while (editOffset != 0 && guard-- > 0) {
+        val seen = HashSet<Int>() // each save is read once, however the chain loops
+        while (editOffset != 0 && seen.add(editOffset)) {
             val edit = r.record(editOffset)?.takeIf { it.type == RT.USER_EDIT_ATOM && it.length >= 16 } ?: break
             r.record(r.i32(edit.start + 12))?.takeIf { it.type == RT.PERSIST_DIRECTORY_ATOM }?.let { dir ->
                 var off = dir.start

@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.ppt
 
+import io.github.baeseungwon1010.officecanvas.util.Limits
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
@@ -34,6 +35,8 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
     private fun readLong(offset: Int): Long = buf.getLong(offset)
 
     private val sectorSize: Int
+    /** Whole sectors present in the file after the header. */
+    private val sectorCount: Int
     private val miniStreamCutoff: Int
     private val fat: IntArray
     private val miniFat: IntArray
@@ -49,7 +52,10 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
         private const val FREESECT = -1
         private const val ENDOFCHAIN = -2
 
-        fun open(file: File): Ole2Reader = Ole2Reader(file.readBytes())
+        fun open(file: File): Ole2Reader {
+            if (file.length() > Limits.MAX_PPT_BYTES) throw FormatException("file too large: ${file.length()} bytes")
+            return Ole2Reader(file.readBytes())
+        }
     }
 
     init {
@@ -57,9 +63,10 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
             throw FormatException("not an OLE2/CFB file (missing D0CF11E0 signature)")
         }
         val sectorShift = readShort(30)
+        if (sectorShift != 9 && sectorShift != 12) throw FormatException("unsupported sector size 2^$sectorShift")
         sectorSize = 1 shl sectorShift
+        sectorCount = ((bytes.size.toLong() - sectorSize) / sectorSize).toInt().coerceAtLeast(0)
         miniStreamCutoff = readInt(56)
-        val numFatSectors = readInt(44)
         val firstDirSector = readInt(48)
         val firstMiniFatSector = readInt(60)
         val numMiniFatSectors = readInt(64)
@@ -72,28 +79,32 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
         val fatSectorLocations = mutableListOf<Int>()
         for (i in 0 until 109) {
             val loc = readInt(76 + i * 4)
-            if (loc != FREESECT) fatSectorLocations += loc
+            if (loc in 0 until sectorCount) fatSectorLocations += loc
         }
+        // The DIFAT chain and the FAT are sized by the file itself, never by the
+        // counts the header claims, and every chain is followed at most once per
+        // sector: a crafted header or a sector pointing at itself must not turn into
+        // a huge allocation or an endless loop.
         var difatSector = firstDifatSector
-        var remainingDifat = numDifatSectors
-        while (difatSector != ENDOFCHAIN && remainingDifat > 0) {
+        var remainingDifat = minOf(numDifatSectors, sectorCount)
+        val seenDifat = java.util.BitSet()
+        while (difatSector in 0 until sectorCount && !seenDifat[difatSector] && remainingDifat > 0) {
+            seenDifat.set(difatSector)
             val secOff = sectorOffset(difatSector)
-            if (secOff + sectorSize > bytes.size) break
             val entriesPerSector = sectorSize / 4 - 1
             for (i in 0 until entriesPerSector) {
                 val loc = readInt(secOff + i * 4)
-                if (loc != FREESECT) fatSectorLocations += loc
+                if (loc in 0 until sectorCount && fatSectorLocations.size < sectorCount) fatSectorLocations += loc
             }
             difatSector = readInt(secOff + entriesPerSector * 4)
             remainingDifat--
         }
 
-        val fatEntries = maxOf(fatSectorLocations.size, numFatSectors) * (sectorSize / 4)
+        val fatEntries = fatSectorLocations.size * (sectorSize / 4)
         fat = IntArray(fatEntries)
         var fatIdx = 0
         for (loc in fatSectorLocations) {
             val secOff = sectorOffset(loc)
-            if (secOff + sectorSize > bytes.size) { fatIdx += sectorSize / 4; continue }
             for (i in 0 until sectorSize / 4) {
                 if (fatIdx < fat.size) fat[fatIdx] = readInt(secOff + i * 4)
                 fatIdx++
@@ -145,7 +156,8 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
         }
     }
 
-    private fun sectorOffset(sector: Int): Int = 512 + sector * sectorSize
+    /** Sector n follows the header, which takes one sector's worth of space. */
+    private fun sectorOffset(sector: Int): Int = (sector + 1) * sectorSize
 
     /** Follows a regular FAT chain from `firstSector`, concatenating full sectors.
      *  `knownSize` trims the result to the stream's declared size (a stream's last
@@ -154,11 +166,10 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
     private fun readChain(firstSector: Int, knownSize: Long): ByteArray {
         val out = ByteArrayOutputStream()
         var sector = firstSector
-        var guard = fat.size + 1 // a corrupt/cyclic chain must not hang the parser
-        while (sector >= 0 && guard-- > 0) {
-            val off = sectorOffset(sector)
-            if (off + sectorSize > bytes.size) break
-            out.write(bytes, off, sectorSize)
+        val seen = java.util.BitSet() // a cyclic chain must not hang or grow forever
+        while (sector in 0 until sectorCount && !seen[sector]) {
+            seen.set(sector)
+            out.write(bytes, sectorOffset(sector), sectorSize)
             sector = if (sector < fat.size) fat[sector] else ENDOFCHAIN
         }
         val all = out.toByteArray()
@@ -172,8 +183,9 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
         val miniStreamBytes = readChain(miniStreamFirstSector, miniStreamSize)
         val out = ByteArrayOutputStream()
         var sector = firstSector
-        var guard = miniFat.size + 1
-        while (sector >= 0 && guard-- > 0) {
+        val seen = java.util.BitSet()
+        while (sector >= 0 && sector < miniStreamBytes.size / MINI_SECTOR_SIZE && !seen[sector]) {
+            seen.set(sector)
             val off = sector * MINI_SECTOR_SIZE
             if (off + MINI_SECTOR_SIZE > miniStreamBytes.size) break
             out.write(miniStreamBytes, off, MINI_SECTOR_SIZE)

@@ -63,11 +63,12 @@ internal object PptGeometry {
             val seg = s.segment(k)
             val count = (seg and 0x1FFF).coerceAtLeast(1)
             when (seg ushr 13) {
-                0 -> repeat(count) { if (vi < pts.size) { ops += PathOp.LineTo(nx(vi), ny(vi)); vi++ } }
-                1 -> repeat(count) {
-                    if (vi + 2 < pts.size) {
-                        ops += PathOp.CubicTo(nx(vi), ny(vi), nx(vi + 1), ny(vi + 1), nx(vi + 2), ny(vi + 2))
-                    }
+                // Each loop stops once the vertices run out, so a huge segment
+                // count can't spin through millions of no-op repetitions.
+                0 -> for (j in 0 until count) { if (vi >= pts.size) break; ops += PathOp.LineTo(nx(vi), ny(vi)); vi++ }
+                1 -> for (j in 0 until count) {
+                    if (vi + 2 >= pts.size) { vi = pts.size; break }
+                    ops += PathOp.CubicTo(nx(vi), ny(vi), nx(vi + 1), ny(vi + 1), nx(vi + 2), ny(vi + 2))
                     vi += 3
                 }
                 2 -> if (vi < pts.size) { ops += PathOp.MoveTo(nx(vi), ny(vi)); vi++ }

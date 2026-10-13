@@ -8,6 +8,8 @@ import io.github.baeseungwon1010.officecanvas.slide.Gradient
 import io.github.baeseungwon1010.officecanvas.slide.Element
 import io.github.baeseungwon1010.officecanvas.slide.TextBody
 import io.github.baeseungwon1010.officecanvas.slide.VAnchor
+import io.github.baeseungwon1010.officecanvas.util.Limits
+import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 
 private const val EMU_PER_MASTER_UNIT = 1587.5
 
@@ -152,7 +154,17 @@ internal class Blip(val bytes: ByteArray, val kind: Kind) {
 /** Pictures: a 1-based "pib" index into the drawing group's blip store, whose
  *  entries point at blip records in the separate "Pictures" stream. */
 internal class BlipStore(private val pictures: RecordReader?, private val offsets: List<Int>) {
-    fun blip(pib: Int): Blip? {
+    // Each picture is extracted once, however many shapes use it, and the bytes
+    // extracted for one deck are budgeted: a small deflate bomb referenced by many
+    // shapes would otherwise inflate again for each.
+    private val cache = HashMap<Int, Blip?>()
+    private var budget = MAX_TOTAL_BYTES
+
+    fun blip(pib: Int): Blip? = cache.getOrPut(pib) {
+        extract(pib)?.takeIf { it.bytes.size <= budget }?.also { budget -= it.bytes.size }
+    }
+
+    private fun extract(pib: Int): Blip? {
         val r = pictures ?: return null
         val offset = offsets.getOrNull(pib - 1) ?: return null
         val rec = r.record(offset) ?: return null
@@ -195,7 +207,7 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
         fun wrap(bytes: ByteArray) =
             if (kind == Blip.Kind.WMF) WmfRenderer.placeable(bytes, r.i32(header + 4), r.i32(header + 8), r.i32(header + 12), r.i32(header + 16)) else bytes
         if (!compressed) return Blip(wrap(r.data.copyOfRange(dataStart, dataEnd)), kind)
-        if (uncompressed !in 1..64_000_000) return null
+        if (uncompressed !in 1..SafeBitmaps.MAX_IMAGE_BYTES) return null
         val out = ByteArray(uncompressed)
         val inflater = java.util.zip.Inflater()
         return try {
@@ -248,6 +260,9 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
         private val JPEG_MAGIC = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())
         private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
         val EMPTY = BlipStore(null, emptyList())
+
+        /** Picture bytes extracted from one deck, in total. */
+        private const val MAX_TOTAL_BYTES = 256 shl 20
     }
 }
 
@@ -284,24 +299,25 @@ internal class DrawingReader(
         var background: Background? = null
         for (child in r.children(dg)) {
             when (child.type) {
-                RT.SPGR_CONTAINER -> walk(child, null, includePlaceholders, elements)
+                RT.SPGR_CONTAINER -> walk(child, null, includePlaceholders, elements, 0)
                 RT.SP_CONTAINER -> background = background ?: readBackground(child)
             }
         }
         return Drawing(background, elements)
     }
 
-    private fun walk(spgr: Rec, xf: Xform?, includePlaceholders: Boolean, out: MutableList<Element>) {
+    private fun walk(spgr: Rec, xf: Xform?, includePlaceholders: Boolean, out: MutableList<Element>, depth: Int) {
+        if (depth > Limits.MAX_NESTING) return
         // The first SpContainer describes the group itself (or the patriarch).
         for ((i, child) in r.children(spgr).withIndex()) {
             when (child.type) {
                 RT.SP_CONTAINER -> if (i > 0) out += readShape(child, xf, includePlaceholders)
-                RT.SPGR_CONTAINER -> readGroup(child, xf, includePlaceholders, out)
+                RT.SPGR_CONTAINER -> readGroup(child, xf, includePlaceholders, out, depth + 1)
             }
         }
     }
 
-    private fun readGroup(spgr: Rec, parent: Xform?, includePlaceholders: Boolean, out: MutableList<Element>) {
+    private fun readGroup(spgr: Rec, parent: Xform?, includePlaceholders: Boolean, out: MutableList<Element>, depth: Int) {
         val head = r.children(spgr).firstOrNull { it.type == RT.SP_CONTAINER } ?: return
         val kids = r.children(head)
         val box = anchorBox(kids, parent) ?: return
@@ -311,7 +327,7 @@ internal class DrawingReader(
         val gw = r.i32(fspgr.start + 8) - gx0
         val gh = r.i32(fspgr.start + 12) - gy0
         if (gw == 0 || gh == 0) return
-        walk(spgr, Xform(box.x, box.y, box.w.toDouble() / gw, box.h.toDouble() / gh, gx0, gy0), includePlaceholders, out)
+        walk(spgr, Xform(box.x, box.y, box.w.toDouble() / gw, box.h.toDouble() / gh, gx0, gy0), includePlaceholders, out, depth)
     }
 
     /** Top-level shapes carry a ClientAnchor in master units — (top, left, right,

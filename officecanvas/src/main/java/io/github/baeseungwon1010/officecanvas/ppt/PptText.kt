@@ -418,24 +418,27 @@ private val SYMBOL = mapOf(0xB7 to "•", 0x2D to "−", 0xAE to "→", 0xD7 to 
 
 /** PF and CF runs of a StyleTextPropAtom, as (count, value) lists. */
 private class StyleRuns(val pf: List<Triple<Int, Int, Pf>>, val cf: List<Pair<Int, Cf>>) {
+    // Lookups come in increasing index order, so each list is walked once overall
+    // rather than from the start on every call (quadratic for many short runs).
+    private var pfRun = 0
+    private var pfStart = 0
+    private var cfRun = 0
+    private var cfStart = 0
+
     /** Indent level and paragraph formatting in effect at [index]. */
     fun pfAt(index: Int): Pair<Int, Pf> {
-        var i = index
-        for ((count, level, pf) in pf) {
-            if (i < count) return level.coerceIn(0, 4) to pf
-            i -= count
-        }
-        return pf.lastOrNull()?.let { it.second.coerceIn(0, 4) to it.third } ?: (0 to Pf())
+        if (index < pfStart) { pfRun = 0; pfStart = 0 }
+        while (pfRun < pf.size && index >= pfStart + pf[pfRun].first) { pfStart += pf[pfRun].first; pfRun++ }
+        val run = pf.getOrNull(pfRun) ?: pf.lastOrNull() ?: return 0 to Pf()
+        return run.second.coerceIn(0, 4) to run.third
     }
 
     /** Character formatting at [index] and the index where that run ends. */
     fun cfAt(index: Int): Pair<Cf, Int> {
-        var runStart = 0
-        for ((count, cf) in cf) {
-            if (index < runStart + count) return cf to runStart + count
-            runStart += count
-        }
-        return (cf.lastOrNull()?.second ?: Cf()) to Int.MAX_VALUE
+        if (index < cfStart) { cfRun = 0; cfStart = 0 }
+        while (cfRun < cf.size && index >= cfStart + cf[cfRun].first) { cfStart += cf[cfRun].first; cfRun++ }
+        val run = cf.getOrNull(cfRun) ?: return (cf.lastOrNull()?.second ?: Cf()) to Int.MAX_VALUE
+        return run.second to cfStart + run.first
     }
 }
 
@@ -496,6 +499,9 @@ internal class NumberCounter {
 /** TextAutoNumberSchemeEnum (MS-PPT 2.13.28) rendered for number [n]. */
 internal fun formatNumber(scheme: Int, n: Int): String {
     fun alpha(upper: Boolean): String {
+        // Letters repeat past z (aa, bbb, ...), so very long lists switch to digits
+        // rather than building ever-longer labels.
+        if (n > 26 * 26) return n.toString()
         val c = ((if (upper) 'A' else 'a') + (n - 1) % 26).toString()
         return c.repeat((n - 1) / 26 + 1)
     }
@@ -569,7 +575,14 @@ internal fun readStyleTextProp9(r: RecordReader, atom: Rec): List<AutoNumber?> {
         if (sib(2)) off += 2
         if (sib(6)) off += 2
         if (sib(5)) off += 4
-        if (sib(9)) { if (off + 4 > atom.end) break; off += 4 + 4 * r.i32(off) }
+        if (sib(9)) {
+            // smartTags: a count, then that many 4-byte entries. A negative or
+            // oversized count would move the cursor backwards and loop forever.
+            if (off + 4 > atom.end) break
+            val tags = r.i32(off)
+            if (tags < 0 || tags > (atom.end - off - 4) / 4) break
+            off += 4 + 4 * tags
+        }
         if (off > atom.end) break
         out += if (has || (number != null && !pf(25))) number ?: AutoNumber(3, 1) else null
     }
