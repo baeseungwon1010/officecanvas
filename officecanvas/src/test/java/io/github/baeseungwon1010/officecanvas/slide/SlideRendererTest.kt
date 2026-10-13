@@ -69,6 +69,25 @@ class SlideRendererTest {
         println("Rendered PNGs written to: ${outDir.absolutePath}")
     }
 
+    @Test
+    fun `draws cropped pictures, SVG-only icons and alternate-content fallbacks`() {
+        val file = sample("pptx_features.pptx")
+        val deck = PptxParser.parse(file)
+        var slide: Bitmap? = null
+        // 10in wide at 1000px: 100px per inch.
+        SlideRenderer.render(deck.copy(slides = listOf(deck.slides[5])), file, targetLongSidePx = 1000) { _, bmp -> slide = bmp }
+        val bmp = slide!!
+        savePng(bmp, "pptx_features_pictures.png")
+        fun near(x: Int, y: Int, argb: Int) {
+            val p = bmp.getPixel(x, y)
+            val d = listOf(16, 8, 0).maxOf { kotlin.math.abs(((p shr it) and 0xFF) - ((argb shr it) and 0xFF)) }
+            org.junit.Assert.assertTrue("pixel ($x,$y) is ${Integer.toHexString(p)}, expected ${Integer.toHexString(argb)}", d <= 12)
+        }
+        near(150, 200, 0xFF0000FF.toInt())   // crop keeps the blue right half
+        near(500, 200, 0xFF00A050.toInt())   // SVG circle, colored by its CSS class
+        near(800, 200, 0xFFFFA000.toInt())   // picture from mc:Fallback
+    }
+
     private fun sampleDistinctColors(bmp: Bitmap): Int {
         val seen = HashSet<Int>()
         val stepX = maxOf(1, bmp.width / 60)

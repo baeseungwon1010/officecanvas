@@ -15,6 +15,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 python3 make_sample_deck.py "$tmp"
 python3 make_feature_deck.py "$tmp"
+python3 make_pptx_features.py "$RES/pptx_samples"
 python3 make_sample_hwpx.py "$RES/hwpx_samples"
 python3 make_small_fixtures.py "$RES" "$tmp"
 
