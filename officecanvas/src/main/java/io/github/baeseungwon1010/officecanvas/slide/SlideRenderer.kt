@@ -124,7 +124,10 @@ internal object SlideRenderer {
                 })
                 shape.fillArgb != null -> draw(Paint(Paint.ANTI_ALIAS_FLAG).apply { color = shape.fillArgb; style = Paint.Style.FILL })
             }
-            strokePaint(shape, scale)?.let { draw(it) }
+            strokePaint(shape, scale)?.let { paint ->
+                draw(paint)
+                if (shape.outline != null && (shape.headArrow || shape.tailArrow)) drawPathArrows(canvas, shape, rect, paint, scale)
+            }
             canvas.restore()
         }
         shape.text?.let { drawText(canvas, it, rect, scale, shape.rotation) }
@@ -156,6 +159,29 @@ internal object SlideRenderer {
             if (shape.tailArrow) drawArrowhead(canvas, x1, y1, x2, y2, paint, minHead)
             if (shape.headArrow) drawArrowhead(canvas, x2, y2, x1, y1, paint, minHead)
         }
+    }
+
+    /** Arrowheads on an open outline (an elbow or curved connector): at the first
+     *  point, pointing away from the second, and at the last, pointing along the
+     *  final segment. */
+    private fun drawPathArrows(canvas: Canvas, shape: Element.Shape, rect: RectF, paint: Paint, scale: Double) {
+        val pts = mutableListOf<Pair<Float, Float>>()
+        for (op in shape.outline.orEmpty()) when (op) {
+            is PathOp.MoveTo -> pts += op.x to op.y
+            is PathOp.LineTo -> pts += op.x to op.y
+            is PathOp.CubicTo -> { pts += op.x1 to op.y1; pts += op.x2 to op.y2; pts += op.x to op.y }
+            PathOp.Close -> {}
+        }
+        if (pts.size < 2) return
+        fun px(p: Pair<Float, Float>) = (rect.left + p.first * rect.width()) to (rect.top + p.second * rect.height())
+        fun distinctFrom(from: Int, step: Int): Pair<Float, Float>? {
+            var i = from + step
+            while (i in pts.indices) { if (pts[i] != pts[from]) return px(pts[i]); i += step }
+            return null
+        }
+        val minHead = (6 * EMU_PER_POINT * scale).toFloat()
+        if (shape.headArrow) distinctFrom(0, 1)?.let { (fx, fy) -> val (tx, ty) = px(pts.first()); drawArrowhead(canvas, fx, fy, tx, ty, paint, minHead) }
+        if (shape.tailArrow) distinctFrom(pts.size - 1, -1)?.let { (fx, fy) -> val (tx, ty) = px(pts.last()); drawArrowhead(canvas, fx, fy, tx, ty, paint, minHead) }
     }
 
     /**
@@ -368,8 +394,8 @@ internal object SlideRenderer {
         fun colX(i: Int) = table.box.x + (colXEmu[i] * wScale).toLong()
         fun rowY(i: Int) = table.box.y + (rowYEmu[i] * hScale).toLong()
 
-        val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.LTGRAY; style = Paint.Style.STROKE; strokeWidth = 1.5f
+        val gridPaint = table.gridArgb?.let { argb ->
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = argb; style = Paint.Style.STROKE; strokeWidth = 1.5f }
         }
         for (r in table.cells.indices) {
             for (c in table.cells[r].indices) {
@@ -383,19 +409,34 @@ internal object SlideRenderer {
                 if (cell.fillArgb != null) {
                     canvas.drawRect(rect, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = cell.fillArgb; style = Paint.Style.FILL })
                 }
-                canvas.drawRect(rect, gridPaint)
+                gridPaint?.let { canvas.drawRect(rect, it) }
                 cell.text?.let { drawText(canvas, it, rect, scale, 0f) }
             }
         }
     }
 
     private fun drawText(canvas: Canvas, body: TextBody, box: RectF, scale: Double, rotation: Float) {
-        val innerLeft = box.left + (body.insetLeftEmu * scale).toFloat()
+        var innerLeft = box.left + (body.insetLeftEmu * scale).toFloat()
         val innerTop = box.top + (body.insetTopEmu * scale).toFloat()
         val innerRight = box.right - (body.insetRightEmu * scale).toFloat()
         val innerBottom = box.bottom - (body.insetBottomEmu * scale).toFloat()
-        val width = (innerRight - innerLeft).toInt().coerceAtLeast(1)
-        if (width <= 1) return
+        var width = (innerRight - innerLeft).toInt().coerceAtLeast(1)
+        if (width <= 1 && body.wrap) return
+        if (!body.wrap) {
+            // Unwrapped text runs past its box; lay it out as wide as its longest
+            // line and keep that line where the alignment puts it.
+            val longest = body.paragraphs.mapIndexed { i, p -> layParagraph(p, i == 0, 100_000, scale, 1f) }
+                .maxOfOrNull { lp -> (0 until lp.layout.lineCount).maxOfOrNull { lp.x + lp.layout.getLineWidth(it) } ?: 0f } ?: 0f
+            if (longest > width) {
+                val extra = kotlin.math.ceil(longest).toInt() + 1 - width
+                innerLeft -= when (body.paragraphs.firstOrNull()?.align) {
+                    HAlign.CENTER -> extra / 2f
+                    HAlign.RIGHT -> extra.toFloat()
+                    else -> 0f
+                }
+                width += extra
+            }
+        }
 
         // Auto-fit shrinks the whole box's text by one shared factor to make it fit,
         // rather than each paragraph wrapping independently — so this measures once

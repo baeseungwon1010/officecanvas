@@ -82,7 +82,9 @@ internal sealed class Element {
         val columnWidthsEmu: List<Long>,
         val rowHeightsEmu: List<Long>,
         /** Row-major; a cell spanned by a merge is null. */
-        val cells: List<List<TableCell?>>
+        val cells: List<List<TableCell?>>,
+        /** Color of the cell grid lines; null draws none. */
+        val gridArgb: Int? = 0xFFCCCCCC.toInt()
     ) : Element()
 }
 
@@ -124,7 +126,9 @@ internal data class TextBody(
     /** PowerPoint's "shrink text on overflow"; the renderer may scale down to fit. */
     val autoFit: Boolean = false,
     /** The smallest scale auto-fit may shrink the text to. */
-    val autoFitFloor: Float = 0.45f
+    val autoFitFloor: Float = 0.45f,
+    /** False when lines run on past the box instead of wrapping (wrap="none"). */
+    val wrap: Boolean = true
 )
 
 internal data class Paragraph(
