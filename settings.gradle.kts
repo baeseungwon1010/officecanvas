@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "officecanvas"
-include(":officecanvas")
+include(":officecanvas", ":sample")
