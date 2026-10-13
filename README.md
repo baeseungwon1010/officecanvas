@@ -53,35 +53,39 @@ dependencies {
 
 Any commit hash or `main-SNAPSHOT` works as the version too. To build it yourself instead, run `./gradlew :officecanvas:publishToMavenLocal` and depend on `io.github.baeseungwon1010:officecanvas:0.1.0` from `mavenLocal()`.
 
-Requirements: minSdk 24, Java 17 toolchain. The AAR is about 2.4 MB, most of it bundled fonts (see below).
+Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bundled fonts (see below).
 
 ## What is rendered
 
 | | PPTX | PPT (97–2003) | HWPX |
 |---|---|---|---|
 | Text with size, color, bold/italic/underline | ✓ | ✓ | ✓ (one style per line) |
-| Inheritance from layout / master / theme | ✓ | ✓ (title master → master) | — |
+| Inheritance from layout / master / theme | ✓ (position, fill, text styles, body properties, color map) | ✓ (title master → master) | — |
+| Theme colors with modifiers (lumMod, tint, shade, …) | ✓ | — (stored as RGB) | — |
+| Shape styles (`<p:style>` fill, line and font references) | ✓ | — | — |
 | Bullets | ✓ | ✓ incl. symbol-font bullets | — |
-| Automatic numbering (1. a. i. …) | drawn as • | ✓ | — |
-| Superscript / subscript | — | ✓ | — |
+| Automatic numbering (1. a. i. …) | ✓ | ✓ | — |
+| Superscript / subscript | ✓ | ✓ | — |
+| Shrink text on overflow | the scale PowerPoint saved | estimated | — |
 | Shape fill and outline | ✓ | ✓ | — |
-| Lines, arrowheads, flipped shapes | lines only | ✓ | — |
-| Shape outlines | rectangle, ellipse, rounded rectangle (others as rectangles) | freeform paths + common presets | — |
+| Lines, connectors, arrowheads, flipped shapes | ✓ (straight, elbow, curved) | ✓ | — |
+| Shape outlines | ~65 presets + freeforms | freeforms + common presets | — |
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular | — |
-| Tables | ✓ | as the shapes PowerPoint stores | ✓ (approximate spans) |
-| Pictures | PNG, JPEG, EMF, WMF | PNG, JPEG, EMF, WMF, DIB, TIFF, PICT with embedded JPEG/PNG; crop | PNG, JPEG (lightly tested) |
-| Slide / page background | solid (gradient → first color) | solid, picture, gradient | white |
-| Hidden slides | rendered | skipped, as PowerPoint's own export does | — |
+| Tables | ✓ incl. table styles | as the shapes PowerPoint stores | ✓ (approximate spans) |
+| SmartArt | from the drawing PowerPoint saves with it | — | — |
+| Pictures | PNG, JPEG, EMF, WMF, SVG; crop | PNG, JPEG, EMF, WMF, DIB, TIFF, PICT with embedded JPEG/PNG; crop | PNG, JPEG (lightly tested) |
+| Slide / page background | solid, gradient, picture | solid, picture, gradient | white |
+| Hidden slides | skipped | skipped, as PowerPoint's own export does | — |
 
-Not rendered: charts, SmartArt, shadows, 3-D effects, animations, video, embedded OLE objects other than their preview picture. HWP 5.0 (the older binary `.hwp`) is not supported.
+Not rendered: charts, shadows, glow, 3-D effects, text highlight, animations, video, embedded OLE objects other than their preview picture. HWP 5.0 (the older binary `.hwp`) is not supported.
 
 ## Fonts
 
-Office documents are mostly set in Arial, Times New Roman and Courier New, and line breaks depend on their exact glyph widths. The library bundles Liberation Sans, Serif and Mono, which have the same metrics, under `assets/officecanvas/fonts` (SIL Open Font License 1.1). Text in scripts these fonts don't cover, such as Hangul, falls back to the device's system fonts, so its line breaks can differ slightly from the original.
+Office documents are mostly set in Calibri, Arial, Times New Roman and Courier New, and line breaks depend on their exact glyph widths. The library bundles fonts with the same metrics under `assets/officecanvas/fonts` (SIL Open Font License 1.1): Carlito for Calibri (regular and bold; italics are slanted) and Liberation Sans, Serif and Mono for the other three. Text in scripts these fonts don't cover, such as Hangul, falls back to the device's system fonts, so its line breaks can differ slightly from the original.
 
 ## How close is it
 
-The `.ppt` path was checked slide by slide against LibreOffice's PDF output on two real lecture decks (60 and 75 slides, not included here for copyright reasons): on the 75-slide deck, 66 slides have every text baseline within 6 pt of LibreOffice's. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
+Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 15 real decks (240 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 2.0, down from 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added; most of what remains is Hangul set in different fallback fonts. For `.ppt`, on a 75-slide lecture deck, 66 slides have every text baseline within 6 pt of LibreOffice's. None of these decks are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
 
 LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice disagree (symbol fonts, automatic numbering), the renderer follows PowerPoint.
 

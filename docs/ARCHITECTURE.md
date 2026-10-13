@@ -18,9 +18,14 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 **`slide`**: the model both slide parsers produce, and the renderer that draws it.
 - `SlideModel.kt`: `Deck` → `Slide` → `Element` (`Shape`, `Picture`, `Table`). All geometry is in EMU (914400 per inch). Text is `TextBody` → `Paragraph` → `Run`. Parsing resolves every kind of inheritance (theme, layout, master, placeholder), so the renderer never looks anything up.
 - `SlideRenderer.kt`: draws a `Deck` onto `android.graphics.Canvas`, one slide at a time. Text is laid out with `StaticLayout`, but line height, paragraph spacing and font sizes follow PowerPoint's rules rather than Android's defaults (see FORMAT_NOTES).
-- `OfficeFonts.kt`: loads the bundled Liberation fonts and maps a document's font name to Sans, Serif or Mono.
+- `OfficeFonts.kt`: loads the bundled fonts and maps a document's font name to Carlito (Calibri), Liberation Sans, Serif or Mono.
 
-**`pptx`**: `PptxParser` reads the zip: presentation → slide list → each slide with its layout, master and theme.
+**`pptx`**: the 2007+ XML format.
+- `PptxParser`: presentation → slide list → each slide with its layout, master and theme; placeholders, backgrounds, groups, pictures, tables, SmartArt drawings.
+- `Theme`: the color scheme, color map, theme fonts and format scheme; color modifiers and fills, including style references.
+- `Text`: list styles, paragraph and run properties, body properties, numbering.
+- `Geometry`: preset shape formulas and custom geometry paths.
+- `Xml`: namespaces and DOM helpers, with external entities disabled.
 
 **`ppt`**: the binary PowerPoint 97–2003 format.
 - `Ole2Reader`: the OLE2 / Compound File container (FAT and mini-FAT chains).
@@ -33,7 +38,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 
 **`hwpx`**: `HwpxParser` reads OWPML (the HWPX XML) into pages of positioned text runs, tables and pictures; `HwpxRenderer` draws them.
 
-**`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
+**`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), `SvgRenderer` (the SVG subset of Office icons), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
 
 ## Memory
 
@@ -42,6 +47,6 @@ Each renderer draws a page, hands the bitmap to the caller and moves on. A 60-sl
 ## Adding a feature
 
 1. Find out what the file really stores before writing code: `tools/pptdump.py` for `.ppt` records, `tools/wmfdump.py` for metafile records, or unzip a `.pptx` / `.hwpx`.
-2. Put a slide that uses the feature into a generator (`tools/make_feature_deck.py` for slide features) and regenerate the fixtures with `tools/build_fixtures.sh`.
+2. Put a slide that uses the feature into a generator (`tools/make_pptx_features.py` for `.pptx` features, `tools/make_feature_deck.py` for features of the `.ppt` path) and regenerate the fixtures with `tools/build_fixtures.sh`.
 3. Extend the parser so the feature ends up in the model, and the renderer if the model needs a new field.
 4. Check the result against LibreOffice with `tools/compare.sh`, and add an assertion to the matching test.

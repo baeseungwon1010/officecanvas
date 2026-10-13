@@ -14,6 +14,7 @@ Every document under `officecanvas/src/test/resources` is generated, so the repo
 |---|---|---|
 | `pptx_samples/sample_deck.pptx` | `tools/make_sample_deck.py` (python-pptx) | an ordinary deck: background color, a full-width sidebar, 18 pt and 48 pt Korean titles, cards, a table, a picture at (1 in, 2 in), a dark closing slide |
 | `ppt_samples/sample_deck.ppt` | LibreOffice export of the above | the same content through the binary format |
+| `pptx_samples/pptx_features.pptx` | `tools/make_pptx_features.py` (python-pptx plus hand-written XML) | `.pptx` inheritance and drawing: theme style references and color modifiers, master background and placeholder position, connectors with arrowheads, preset outlines, numbering, superscript, no-wrap and shrunk text, fields, picture crop, an SVG-only icon, `mc:AlternateContent`, the default table style, a hidden slide |
 | `pptx_samples/feature_test.pptx`, `ppt_samples/feature_test.ppt` | `tools/make_feature_deck.py` | one slide per `.ppt` feature: numbering, freeform and preset outlines, gradients, cropping, TIFF, sub/superscript, monospace text |
 | `hwpx_samples/sample.hwpx` | `tools/make_sample_hwpx.py` | three A4 pages of Korean text with headings and a table, with line positions computed the way Hangul saves them |
 | `emf_samples/shapes.emf` | LibreOffice export of an SVG from `tools/make_small_fixtures.py` | paths, polygons, pens and brushes |
@@ -42,7 +43,9 @@ This renders the document with OfficeCanvas (through the `RenderFileTool` test, 
 
 Compare at the size the library renders by default (1600 px). At much smaller sizes pixel rounding dominates the numbers, and shrink-on-overflow can trigger where it shouldn't.
 
-On the generated sample deck, every baseline is within 0.6 pt of LibreOffice's. On a real 75-slide lecture deck, 66 slides have every baseline within 6 pt; most of the rest differ by a few points in regions with many empty lines.
+On the generated sample deck, every baseline is within 0.6 pt of LibreOffice's. On a real 75-slide `.ppt` lecture deck, 66 slides have every baseline within 6 pt; most of the rest differ by a few points in regions with many empty lines.
+
+For `.pptx`, `RenderFileTool` also accepts a directory (`-Pofficecanvas.input=<dir>`) and renders every document in it into its own subdirectory, which makes it practical to score a whole set of decks after each change. On 15 real decks (240 slides) the mean difference score is 2.0; the largest remaining differences are charts, 3-D effects and Hangul set in different fallback fonts.
 
 ## Looking inside a file
 
