@@ -2,6 +2,7 @@ package io.github.baeseungwon1010.officecanvas
 
 import android.content.Context
 import android.graphics.Bitmap
+import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxParser
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxRenderer
 import io.github.baeseungwon1010.officecanvas.ppt.PptParser
@@ -12,7 +13,7 @@ import io.github.baeseungwon1010.officecanvas.util.Limits
 import java.io.File
 
 /**
- * Renders PPTX, PPT and HWPX documents to bitmaps, one page (or slide) at a time.
+ * Renders PPTX, PPT, HWPX and HWP documents to bitmaps, one page (or slide) at a time.
  *
  * ```
  * val pages = OfficeCanvas.render(context, file) { index, bitmap ->
@@ -62,7 +63,7 @@ object OfficeCanvas {
         var kind: DocumentFormat? = format
         try {
             kind = kind ?: DocumentFormat.detect(file)
-                ?: throw OfficeCanvasException("not a PPTX, PPT or HWPX document: ${file.name}")
+                ?: throw OfficeCanvasException("not a PPTX, PPT, HWPX or HWP document: ${file.name}")
             loadFonts(context)
             when (kind) {
                 DocumentFormat.PPTX, DocumentFormat.PPT -> {
@@ -70,6 +71,7 @@ object OfficeCanvas {
                     SlideRenderer.render(deck, file, longSidePx, counting)
                 }
                 DocumentFormat.HWPX -> HwpxRenderer.render(HwpxParser.parse(file), file, longSidePx, counting)
+                DocumentFormat.HWP -> HwpxRenderer.render(HwpParser.parse(file), file, longSidePx, counting)
             }
         } catch (e: OfficeCanvasException) {
             throw e

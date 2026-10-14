@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas
 
+import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import java.io.File
 import java.util.zip.ZipFile
@@ -13,7 +14,10 @@ enum class DocumentFormat {
     PPT,
 
     /** Hangul (OWPML, .hwpx): a zip of XML parts with the layout Hangul saved. */
-    HWPX;
+    HWPX,
+
+    /** Hangul 5.0 (.hwp): binary records in an OLE2 compound file. */
+    HWP;
 
     companion object {
         /**
@@ -47,7 +51,12 @@ enum class DocumentFormat {
         }
 
         private fun detectOle2(file: File): DocumentFormat? = try {
-            if (Ole2Reader.open(file).readStream("PowerPoint Document") != null) PPT else null
+            val ole = Ole2Reader.open(file)
+            when {
+                ole.readStream("PowerPoint Document") != null -> PPT
+                HwpParser.isHwp(ole) -> HWP
+                else -> null
+            }
         } catch (e: Exception) {
             null
         } catch (e: OutOfMemoryError) {

@@ -3,6 +3,7 @@ package io.github.baeseungwon1010.officecanvas
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.RectF
+import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
 import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.TiffDecoder
@@ -319,5 +320,65 @@ class MaliciousInputTest {
         assertNull(SafeXml.parse(xxe.toByteArray(Charsets.UTF_16LE)))
         assertNull(SafeXml.parse(("﻿" + xxe).toByteArray(Charsets.UTF_16BE)))
         assertEquals("r", SafeXml.parse("<r/>".toByteArray())!!.documentElement.tagName)
+    }
+
+    // ---- .hwp records -------------------------------------------------------
+
+    private fun hwpRec(tag: Int, level: Int, payload: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        if (payload.size >= 0xFFF) {
+            out.write(le(8).putInt(0, tag or (level shl 10) or (0xFFF shl 20)).putInt(4, payload.size).array())
+        } else {
+            out.write(le(4).putInt(0, tag or (level shl 10) or (payload.size shl 20)).array())
+        }
+        out.write(payload)
+        return out.toByteArray()
+    }
+
+    private fun hwp(vararg section: ByteArray) =
+        HwpParser.fromStreams(ByteArray(0), section.asSequence()) { _, _, _ -> null }
+
+    @Test
+    fun `an HWP record claiming two gigabytes`() {
+        val section = le(8).putInt(0, 66 or (0xFFF shl 20)).putInt(4, 0x7FFFFFF0).array()
+        survives(5) { hwp(section) }
+    }
+
+    @Test
+    fun `HWP records nested a thousand levels deep`() {
+        val out = ByteArrayOutputStream()
+        for (level in 0 until 1023) out.write(hwpRec(if (level % 2 == 0) 66 else 71, level, ByteArray(24)))
+        survives(10) { hwp(out.toByteArray()) }
+    }
+
+    @Test
+    fun `an HWP table declaring 65535 by 65535 cells`() {
+        val table = hwpRec(71, 1, le(24).putInt(0, 0x74626C20).putInt(16, 1000).putInt(20, 1000).array()) +
+            hwpRec(77, 2, le(22).putShort(4, -1).putShort(6, -1).array()) +
+            hwpRec(72, 2, le(34).array())
+        val para = hwpRec(66, 0, ByteArray(24)) +
+            hwpRec(67, 1, le(18).putShort(0, 11).putShort(14, 11).putShort(16, 13).array()) +
+            hwpRec(69, 1, le(36).putInt(8, 1000).array()) + table
+        survives(10) { hwp(para) }
+    }
+
+    @Test
+    fun `an HWP paragraph with lines going up on every line stops at the page limit`() {
+        val lines = le(36 * 5000)
+        for (i in 0 until 5000) lines.putInt(36 * i, i).putInt(36 * i + 4, if (i % 2 == 0) 100 else 0).putInt(36 * i + 8, 100)
+        val text = le(2 * 5001).apply { for (i in 0 until 5000) putShort(2 * i, 'x'.code.toShort()); putShort(10000, 13) }.array()
+        val para = hwpRec(66, 0, ByteArray(24)) + hwpRec(67, 1, text) + hwpRec(69, 1, lines.array())
+        var pages = 0
+        survives(30) { pages = hwp(para).pages.size }
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
+    @Test
+    fun `garbage DocInfo and sections`() {
+        val random = java.util.Random(7)
+        repeat(20) {
+            val junk = ByteArray(4096).also { random.nextBytes(it) }
+            survives(5) { HwpParser.fromStreams(junk, sequenceOf(junk, junk)) { _, _, _ -> junk } }
+        }
     }
 }
