@@ -4,6 +4,8 @@
 # for slide decks, how far each text baseline sits from LibreOffice's
 # (compare_baselines.py). LibreOffice is only a reference; it isn't PowerPoint.
 # Usage: tools/compare.sh <document> [outdir]   (SOFFICE=/path/to/soffice)
+# Hangul documents need LibreOffice's H2Orestart import filter; LO_PROFILE names a
+# LibreOffice user profile it is installed in.
 # Needs: PyMuPDF, Pillow.
 set -euo pipefail
 doc="$(realpath "$1")"
@@ -17,7 +19,9 @@ mkdir -p "$out"
 (cd "$root" && ./gradlew -q :officecanvas:testDebugUnitTest --tests '*RenderFileTool*' \
     -Pofficecanvas.input="$doc" -Pofficecanvas.output="$out" -Pofficecanvas.longSide=1600)
 
-"$SOFFICE" --headless --norestore --convert-to pdf --outdir "$out" "$doc" >/dev/null
+profile=()
+[ -n "${LO_PROFILE:-}" ] && profile=("-env:UserInstallation=file://$LO_PROFILE")
+"$SOFFICE" "${profile[@]}" --headless --norestore --convert-to pdf --outdir "$out" "$doc" >/dev/null
 pdf="$out/$(basename "${doc%.*}").pdf"
 python3 - "$pdf" "$out" <<'PY'
 import sys, fitz
