@@ -5,10 +5,12 @@ OfficeCanvas.render(context, file)
         │  DocumentFormat.detect: zip with ppt/presentation.xml → PPTX
         │                         zip with Contents/content.hpf → HWPX
         │                         OLE2 with a "PowerPoint Document" stream → PPT
+        │                         OLE2 with an "HWP Document File" header → HWP
         ├── PPTX ── pptx.PptxParser ──┐
         ├── PPT ─── ppt.PptParser ────┼──► slide.Deck ──► slide.SlideRenderer ──► Bitmap per slide
         │                             │                        └── metafile.EmfRenderer / WmfRenderer
-        └── HWPX ── hwpx.HwpxParser ──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
+        ├── HWPX ── hwpx.HwpxParser ──┐
+        └── HWP ─── hwp.HwpParser ────┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
 ```
 
 Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` is `internal`.
@@ -28,7 +30,6 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `Xml`: namespaces and DOM helpers, with external entities disabled.
 
 **`ppt`**: the binary PowerPoint 97–2003 format.
-- `Ole2Reader`: the OLE2 / Compound File container (FAT and mini-FAT chains).
 - `PptRecords`: record header parsing and navigation.
 - `PptParser`: persist directory, slide list, masters, hidden slides; assembles a `Deck`.
 - `PptShapes`: the OfficeArt ("Escher") shape tree: groups, anchors, fill, line, pictures, the picture store.
@@ -36,7 +37,15 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `PptText`: text atoms, character and paragraph formatting, master text styles, bullets, automatic numbering, tab rulers, symbol fonts.
 - `PptColors`: color schemes and color references.
 
-**`hwpx`**: `HwpxParser` reads OWPML (the HWPX XML) into pages of positioned text runs, tables and pictures; `HwpxRenderer` draws them.
+**`hwpx`**: the model both Hangul formats produce, and its renderer.
+- `HwpxModel.kt`: pages of lines (each a list of styled spans with the line's position, width, baseline and alignment), tables (cells with borders, fill, vertical alignment and their own lines, tables and pictures) and pictures, in HWPUNIT (7200 per inch) relative to the body area.
+- `HwpxParser`: OWPML (the HWPX XML).
+- `PageFlow`: splits a section's positioned elements into pages and continues tables and floating objects on the next page.
+- `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
+
+**`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model.
+
+**`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree).
 
 **`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), `SvgRenderer` (the SVG subset of Office icons), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
 
@@ -48,7 +57,7 @@ Each renderer draws a page, hands the bitmap to the caller and moves on. A 60-sl
 
 ## Adding a feature
 
-1. Find out what the file really stores before writing code: `tools/pptdump.py` for `.ppt` records, `tools/wmfdump.py` for metafile records, or unzip a `.pptx` / `.hwpx`.
+1. Find out what the file really stores before writing code: `tools/pptdump.py` for `.ppt` records, `tools/hwpdump.py` for `.hwp` records, `tools/wmfdump.py` for metafile records, or unzip a `.pptx` / `.hwpx`.
 2. Put a slide that uses the feature into a generator (`tools/make_pptx_features.py` for `.pptx` features, `tools/make_feature_deck.py` for features of the `.ppt` path) and regenerate the fixtures with `tools/build_fixtures.sh`.
 3. Extend the parser so the feature ends up in the model, and the renderer if the model needs a new field.
 4. Check the result against LibreOffice with `tools/compare.sh`, and add an assertion to the matching test.
