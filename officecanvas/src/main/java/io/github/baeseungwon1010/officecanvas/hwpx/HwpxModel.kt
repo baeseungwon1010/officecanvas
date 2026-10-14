@@ -34,10 +34,47 @@ internal data class HwpxPage(
     val bodyYHu: Long = 0
 )
 
+/** Paragraph alignment. JUSTIFY stretches every line but a paragraph's last;
+ *  DISTRIBUTE stretches every line, spreading the space between all characters. */
+internal enum class ParaAlign { LEFT, RIGHT, CENTER, JUSTIFY, DISTRIBUTE }
+
+internal data class CharStyle(
+    val sizePt: Float = 10f,
+    val colorArgb: Int = 0xFF000000.toInt(),
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val underline: Boolean = false,
+    val strike: Boolean = false,
+    /** Font faces for Hangul (and other CJK) text and for Latin text. */
+    val hangulFace: String? = null,
+    val latinFace: String? = null,
+    /** 장평: glyph width as a percent of normal. */
+    val widthPercent: Int = 100,
+    /** 자간: extra space between characters as a percent of the font size. */
+    val spacingPercent: Int = 0,
+    /** 1 for superscript, -1 for subscript. */
+    val script: Int = 0
+)
+
+/** A stretch of a line in one character style. */
+internal data class Span(val text: String, val style: CharStyle)
+
+/** A shaded area and border lines; a null side draws no line. */
+internal data class Border(val argb: Int, val widthHu: Long)
+internal data class BorderFill(
+    val left: Border? = null,
+    val right: Border? = null,
+    val top: Border? = null,
+    val bottom: Border? = null,
+    val fillArgb: Int? = null
+)
+
 internal sealed class HwpxElement {
     abstract val xHu: Long
     abstract val yHu: Long
 
+    /** One line as Hangul laid it out: where it starts, how wide its column is,
+     *  how tall it is and where its baseline sits, and its text in styled spans. */
     data class TextRun(
         override val xHu: Long,
         override val yHu: Long,
@@ -47,13 +84,16 @@ internal sealed class HwpxElement {
          *  <hp:cellSz>, which is a minimum/default that real content routinely
          *  exceeds without HWPUNIT updating it. */
         val heightHu: Long,
-        val text: String,
-        val sizePt: Float,
-        val colorArgb: Int,
-        val bold: Boolean,
-        val italic: Boolean,
-        val underline: Boolean
-    ) : HwpxElement()
+        val spans: List<Span>,
+        /** Baseline offset from the line's top. */
+        val baselineHu: Long = heightHu * 85 / 100,
+        val align: ParaAlign = ParaAlign.LEFT,
+        /** The paragraph's last line, which JUSTIFY leaves unstretched. */
+        val lastLine: Boolean = true
+    ) : HwpxElement() {
+        val text: String get() = spans.joinToString("") { it.text }
+        val sizePt: Float get() = spans.maxOfOrNull { it.style.sizePt } ?: 10f
+    }
 
     data class Table(
         override val xHu: Long,
@@ -71,14 +111,23 @@ internal sealed class HwpxElement {
         override val yHu: Long,
         val widthHu: Long,
         val heightHu: Long,
-        /** Entry name inside the .hwpx zip, e.g. "BinData/image1.png". */
-        val zipEntry: String
+        /** Entry name inside the .hwpx zip, e.g. "BinData/image1.png"; null when
+         *  [bytes] holds the picture (a .hwp keeps pictures in OLE2 streams). */
+        val zipEntry: String?,
+        val bytes: ByteArray? = null
     ) : HwpxElement()
 }
 
 internal data class TableCell(
     val colSpan: Int,
     val rowSpan: Int,
-    /** Text runs positioned relative to the cell's own top-left corner. */
-    val runs: List<HwpxElement.TextRun>
-)
+    /** Lines, nested tables and pictures, positioned relative to the cell's own
+     *  top-left corner. */
+    val elements: List<HwpxElement>,
+    /** Borders and shading; null draws the default thin grid. */
+    val borderFill: BorderFill? = null,
+    /** 0 top, 1 middle, 2 bottom: where the content sits in a taller cell. */
+    val vAlign: Int = 0
+) {
+    val runs: List<HwpxElement.TextRun> get() = elements.filterIsInstance<HwpxElement.TextRun>()
+}

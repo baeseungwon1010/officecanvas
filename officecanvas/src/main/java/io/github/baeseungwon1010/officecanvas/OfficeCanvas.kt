@@ -63,9 +63,9 @@ object OfficeCanvas {
         try {
             kind = kind ?: DocumentFormat.detect(file)
                 ?: throw OfficeCanvasException("not a PPTX, PPT or HWPX document: ${file.name}")
+            loadFonts(context)
             when (kind) {
                 DocumentFormat.PPTX, DocumentFormat.PPT -> {
-                    loadFonts(context)
                     val deck = if (kind == DocumentFormat.PPTX) PptxParser.parse(file) else PptParser.parse(file)
                     SlideRenderer.render(deck, file, longSidePx, counting)
                 }

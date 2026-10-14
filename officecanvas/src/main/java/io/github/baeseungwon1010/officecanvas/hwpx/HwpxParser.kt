@@ -27,24 +27,21 @@ internal object HwpxParser {
 
     class ParseException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-    private data class CharStyle(
-        val sizePt: Float,
-        val colorArgb: Int,
-        val bold: Boolean,
-        val italic: Boolean,
-        val underline: Boolean
-    )
-
-    private class Header(val charStyles: Map<String, CharStyle>) {
-        fun styleOf(charPrIdRef: String?): CharStyle =
-            charStyles[charPrIdRef] ?: CharStyle(10f, 0xFF000000.toInt(), false, false, false)
+    private class Header(
+        val charStyles: Map<String, CharStyle>,
+        val paraAligns: Map<String, ParaAlign> = emptyMap(),
+        val borderFills: Map<String, BorderFill> = emptyMap()
+    ) {
+        fun styleOf(charPrIdRef: String?): CharStyle = charStyles[charPrIdRef] ?: CharStyle()
     }
 
     /** One page's worth of geometry, read from the first paragraph's <hp:secPr>
      *  (later sections reuse the last one seen if they omit their own). */
-    private data class PageGeometry(val widthHu: Long, val heightHu: Long, val bodyXHu: Long = 0, val bodyYHu: Long = 0)
+    /** [bottomHu]: bottom margin plus footer area, below the body. */
+    private data class PageGeometry(val widthHu: Long, val heightHu: Long, val bodyXHu: Long = 0, val bodyYHu: Long = 0, val bottomHu: Long = 0)
 
     fun parse(file: File): HwpxDoc = ZipFile(file).use { zip ->
+        lineStarts.get().clear()
         val contentDoc = zip.xml("Contents/content.hpf")
             ?: throw ParseException("not a .hwpx: Contents/content.hpf is missing")
         val manifest = contentDoc.first(OPF, "manifest")?.all(OPF, "item")
@@ -79,6 +76,7 @@ internal object HwpxParser {
                 if (DEBUG_LOG_ERRORS) e.printStackTrace()
             }
         }
+        lineStarts.get().clear()
         HwpxDoc(pages)
     }
 
@@ -98,23 +96,21 @@ internal object HwpxParser {
             val margin = pagePr?.child(HP, "margin")
             val bodyX = (margin?.longOrNull("left") ?: 0L) + (margin?.longOrNull("gutter") ?: 0L)
             val bodyY = (margin?.longOrNull("top") ?: 0L) + (margin?.longOrNull("header") ?: 0L)
-            if (w != null && h != null && w > 0 && h > 0) PageGeometry(w, h, bodyX, bodyY) else null
+            val bottom = (margin?.longOrNull("bottom") ?: 0L) + (margin?.longOrNull("footer") ?: 0L)
+            if (w != null && h != null && w > 0 && h > 0) PageGeometry(w, h, bodyX, bodyY, bottom) else null
         } ?: fallbackGeometry
 
-        val pages = mutableListOf<MutableList<HwpxElement>>(mutableListOf())
-        var lastVertpos = -1L
-
+        val flow = PageFlow(geometry.heightHu - geometry.bodyYHu - geometry.bottomHu)
         for (p in paragraphs) {
-            for (el in parseParagraphFlow(p, header, 0)) {
-                if (el.yHu < lastVertpos) {
-                    if (pages.size >= Limits.MAX_PAGES) break
-                    pages.add(mutableListOf())
-                }
-                lastVertpos = el.yHu
-                pages.last() += el
+            if (flow.full) break
+            // pageBreak="1": the paragraph starts a page even when its first line
+            // sits as high as the previous page's last paragraph did.
+            val forcedBreak = p.getAttribute("pageBreak") == "1"
+            for ((k, el) in parseParagraphFlow(p, header, 0).withIndex()) {
+                flow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in lineStarts.get())
             }
         }
-        return pages.filter { it.isNotEmpty() }.map { geometry to HwpxPage(geometry.widthHu, geometry.heightHu, it, geometry.bodyXHu, geometry.bodyYHu) }
+        return flow.finish().map { geometry to HwpxPage(geometry.widthHu, geometry.heightHu, it, geometry.bodyXHu, geometry.bodyYHu) }
     }
 
     /** Marks an inline table/picture's spot in a paragraph's character stream —
@@ -134,6 +130,9 @@ internal object HwpxParser {
      * would misdraw its position and corrupt page-break detection (a table's y
      * would then look like it went backwards on every page that has one).
      */
+    /** Elements that begin a line (see PageFlow.add); identity, not equality. */
+    private val lineStarts = ThreadLocal.withInitial { java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>()) }
+
     private fun parseParagraphFlow(p: DomElement, header: Header, depth: Int): List<HwpxElement> {
         val text = StringBuilder()
         val inlineAt = mutableMapOf<Int, HwpxElement>() // stream offset -> object
@@ -165,45 +164,76 @@ internal object HwpxParser {
         val lineSegs = p.child(HP, "linesegarray")?.all(HP, "lineseg").orEmpty()
         if (lineSegs.isEmpty()) return emptyList()
 
+        val align = header.paraAligns[p.getAttribute("paraPrIDRef")] ?: ParaAlign.LEFT
         val out = mutableListOf<HwpxElement>()
         for ((i, seg) in lineSegs.withIndex()) {
             val start = seg.long("textpos").toInt().coerceIn(0, text.length)
             val end = if (i + 1 < lineSegs.size) lineSegs[i + 1].long("textpos").toInt().coerceIn(0, text.length) else text.length
             if (end <= start) continue
+            val last = i == lineSegs.size - 1
 
             var runStart = start
+            val lineFirst = out.size
+            fun emit(el: HwpxElement) {
+                if (out.size == lineFirst) lineStarts.get() += el
+                out += el
+            }
             for (offset in start until end) {
                 val obj = inlineAt[offset] ?: continue
                 if (offset > runStart) {
-                    textRunFrom(text, runStart, offset, runBoundaries, seg)?.let { out += it }
+                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last)?.let { emit(it) }
                 }
-                out += obj.withPosition(seg.long("horzpos"), seg.long("vertpos"))
+                emit(obj.withPosition(seg.long("horzpos"), seg.long("vertpos")))
                 runStart = offset + 1
             }
             if (runStart < end) {
-                textRunFrom(text, runStart, end, runBoundaries, seg)?.let { out += it }
+                textRunFrom(text, runStart, end, runBoundaries, seg, align, last)?.let { emit(it) }
             }
         }
         return out
     }
 
+    /** The line's text split where its character style changes. */
     private fun textRunFrom(
         text: StringBuilder, start: Int, end: Int,
-        runBoundaries: List<Pair<Int, CharStyle>>, seg: DomElement
+        runBoundaries: List<Pair<Int, CharStyle>>, seg: DomElement, align: ParaAlign, lastLine: Boolean
     ): HwpxElement.TextRun? {
-        val slice = text.substring(start, end)
-        if (slice.isBlank()) return null
-        // The dominant style for this piece: whichever run boundary its start falls
-        // under. Mixed bold/plain within one line is approximated as a single style
-        // rather than re-split per run — acceptable for a converter, not an editor.
-        val style = runBoundaries.lastOrNull { it.first <= start }?.second ?: runBoundaries.first().second
+        if (text.substring(start, end).isBlank()) return null
+        val spans = mutableListOf<Span>()
+        var pos = start
+        while (pos < end) {
+            val idx = runBoundaries.indexOfLast { it.first <= pos }.coerceAtLeast(0)
+            val style = runBoundaries.getOrNull(idx)?.second ?: CharStyle()
+            val next = (runBoundaries.getOrNull(idx + 1)?.first ?: end).coerceIn(pos + 1, end)
+            val piece = text.substring(pos, next).replace(INLINE_OBJECT_MARKER.toString(), "")
+            if (piece.isNotEmpty()) spans += Span(piece, style)
+            pos = next
+        }
+        val height = seg.long("textheight")
         return HwpxElement.TextRun(
             xHu = seg.long("horzpos"), yHu = seg.long("vertpos"), widthHu = seg.long("horzsize"),
-            heightHu = seg.long("textheight"),
-            text = slice, sizePt = style.sizePt, colorArgb = style.colorArgb,
-            bold = style.bold, italic = style.italic, underline = style.underline
+            heightHu = height, spans = spans.trimEndSpaces(),
+            baselineHu = seg.longOrNull("baseline") ?: (height * 85 / 100),
+            align = align, lastLine = lastLine
         )
     }
+
+    /** A line's trailing spaces take no room (alignment measures without them). */
+    private fun List<Span>.trimEndSpaces(): List<Span> {
+        val out = toMutableList()
+        while (out.isNotEmpty()) {
+            val t = out.last().text.trimEnd()
+            if (t.isEmpty()) out.removeAt(out.size - 1) else { out[out.size - 1] = out.last().copy(text = t); break }
+        }
+        return out
+    }
+
+    private fun HwpxElement.shifted(dx: Long, dy: Long): HwpxElement = withPosition(xHu + dx, yHu + dy)
+
+    /** A line can't be wider than the cell it is in; some writers save the page's
+     *  width for lines in cells. */
+    private fun HwpxElement.fitTo(width: Long): HwpxElement =
+        if (this is HwpxElement.TextRun && width > 0 && xHu + widthHu > width) copy(widthHu = (width - xHu).coerceAtLeast(width / 4)) else this
 
     private fun HwpxElement.withPosition(x: Long, y: Long): HwpxElement = when (this) {
         is HwpxElement.Table -> copy(xHu = x, yHu = y)
@@ -247,10 +277,20 @@ internal object HwpxParser {
             val rowSpan = span?.getAttribute("rowSpan")?.toIntOrNull() ?: 1
 
             // A cell's own nested table/picture is out of scope for this pass (the
-            // cell coordinate space would need to nest too) — text only.
-            val cellRuns = tc.child(HP, "subList")?.all(HP, "p").orEmpty().flatMap { cellP ->
-                parseParagraphFlow(cellP, header, depth).filterIsInstance<HwpxElement.TextRun>()
-            }
+            // cell coordinate space would need to nest too) — text only. Lines are
+            // relative to the cell's inner area; some writers start each paragraph
+            // at 0 rather than below the previous one, and those are stacked.
+            val subList = tc.child(HP, "subList")
+            val margin = tc.child(HP, "cellMargin")
+            var cursor = 0L
+            val cellRuns = subList?.all(HP, "p").orEmpty().flatMap { cellP ->
+                val segs = cellP.child(HP, "linesegarray")?.all(HP, "lineseg").orEmpty()
+                val firstY = segs.firstOrNull()?.long("vertpos")
+                val shift = if (firstY != null && firstY < cursor) cursor - firstY else 0L
+                segs.lastOrNull()?.let { cursor = it.long("vertpos") + it.long("vertsize").takeIf { v -> v > 0 }.let { v -> v ?: it.long("textheight") } + it.long("spacing") + shift }
+                parseParagraphFlow(cellP, header, depth).map { it.shifted(0, shift) }
+            }.map { it.shifted(margin?.long("left") ?: 0L, margin?.long("top") ?: 0L) }
+                .map { it.fitTo(tc.child(HP, "cellSz")?.long("width")?.minus((margin?.long("left") ?: 0L) + (margin?.long("right") ?: 0L)) ?: 0L) }
             // <hp:cellSz> is a declared minimum that real content routinely outgrows
             // without it being kept in sync — one real sample had a 6-line answer
             // measured at 282 HWPUNIT tall, under half a line, and a 4-column table
@@ -260,14 +300,18 @@ internal object HwpxParser {
             // cell's size is left to the rows/columns it spans, not attributed to
             // just the first one.
             if (rowSpan == 1) {
-                val contentBottom = cellRuns.maxOfOrNull { it.yHu + it.heightHu } ?: 0L
+                val contentBottom = cellRuns.filterIsInstance<HwpxElement.TextRun>().maxOfOrNull { it.yHu + it.heightHu } ?: 0L
                 rowHeights[row] = maxOf(rowHeights[row] ?: 0L, contentBottom)
             }
             if (colSpan == 1) {
-                val contentRight = cellRuns.maxOfOrNull { it.xHu + it.widthHu } ?: 0L
+                val contentRight = cellRuns.filterIsInstance<HwpxElement.TextRun>().maxOfOrNull { it.xHu + it.widthHu } ?: 0L
                 colWidths[col] = maxOf(colWidths[col] ?: 0L, contentRight)
             }
-            rows[row][col] = TableCell(colSpan, rowSpan, cellRuns)
+            rows[row][col] = TableCell(
+                colSpan, rowSpan, cellRuns,
+                borderFill = header.borderFills[tc.getAttribute("borderFillIDRef")],
+                vAlign = when (subList?.getAttribute("vertAlign")) { "CENTER" -> 1; "BOTTOM" -> 2; else -> 0 }
+            )
         }
         if (rows.isEmpty()) return null
         val maxCol = colCnt
@@ -293,21 +337,57 @@ internal object HwpxParser {
     }
 
     private fun parseHeader(doc: Document): Header {
+        val refList = doc.first(HH, "refList")
+        // Fonts are listed per script; a character property names one per script.
+        val faces = refList?.first(HH, "fontfaces")?.all(HH, "fontface").orEmpty().associate { ff ->
+            ff.getAttribute("lang") to ff.all(HH, "font").associate { it.getAttribute("id") to it.getAttribute("face") }
+        }
         val styles = mutableMapOf<String, CharStyle>()
-        for (charPr in doc.first(HH, "refList")?.first(HH, "charProperties")?.all(HH, "charPr").orEmpty()) {
+        for (charPr in refList?.first(HH, "charProperties")?.all(HH, "charPr").orEmpty()) {
             val id = charPr.getAttribute("id")
             if (id.isBlank()) continue
             val heightHundredthsPt = charPr.getAttribute("height").toLongOrNull() ?: 1000L
             val colorHex = charPr.getAttribute("textColor").removePrefix("#").takeIf { it.length == 6 }
+            val fontRef = charPr.child(HH, "fontRef")
             styles[id] = CharStyle(
                 sizePt = heightHundredthsPt / 100f,
                 colorArgb = colorHex?.toIntOrNull(16)?.let { (0xFF shl 24) or it } ?: 0xFF000000.toInt(),
                 bold = charPr.child(HH, "bold") != null,
                 italic = charPr.child(HH, "italic") != null,
-                underline = charPr.child(HH, "underline") != null
+                underline = charPr.child(HH, "underline")?.getAttribute("type")?.let { it != "NONE" } ?: false,
+                hangulFace = fontRef?.getAttribute("hangul")?.let { faces["HANGUL"]?.get(it) },
+                latinFace = fontRef?.getAttribute("latin")?.let { faces["LATIN"]?.get(it) },
+                widthPercent = charPr.child(HH, "ratio")?.getAttribute("hangul")?.toIntOrNull() ?: 100,
+                spacingPercent = charPr.child(HH, "spacing")?.getAttribute("hangul")?.toIntOrNull() ?: 0,
+                script = when {
+                    charPr.child(HH, "supscript") != null -> 1
+                    charPr.child(HH, "subscript") != null -> -1
+                    else -> 0
+                }
             )
         }
-        return Header(styles)
+        val aligns = refList?.first(HH, "paraProperties")?.all(HH, "paraPr").orEmpty().associate { pp ->
+            pp.getAttribute("id") to when (pp.first(HH, "align")?.getAttribute("horizontal")) {
+                "CENTER" -> ParaAlign.CENTER
+                "RIGHT" -> ParaAlign.RIGHT
+                "JUSTIFY" -> ParaAlign.JUSTIFY
+                "DISTRIBUTE", "DISTRIBUTE_SPACE" -> ParaAlign.DISTRIBUTE
+                else -> ParaAlign.LEFT
+            }
+        }
+        val borderFills = refList?.first(HH, "borderFills")?.all(HH, "borderFill").orEmpty().associate { bf ->
+            fun side(name: String): Border? {
+                val b = bf.child(HH, name) ?: return null
+                if (b.getAttribute("type").let { it.isBlank() || it == "NONE" }) return null
+                val mm = b.getAttribute("width").substringBefore(' ').toFloatOrNull() ?: 0.12f
+                val color = b.getAttribute("color").removePrefix("#").toIntOrNull(16) ?: 0
+                return Border((0xFF shl 24) or color, (mm * HWPUNIT_PER_INCH / 25.4).toLong())
+            }
+            val face = bf.first(HC, "winBrush")?.getAttribute("faceColor")?.removePrefix("#")
+                ?.takeIf { it.length == 6 }?.toIntOrNull(16)?.let { (0xFF shl 24) or it }
+            bf.getAttribute("id") to BorderFill(side("leftBorder"), side("rightBorder"), side("topBorder"), side("bottomBorder"), face)
+        }
+        return Header(styles, aligns, borderFills)
     }
 
     // ---- zip / xml helpers -------------------------------------------------
