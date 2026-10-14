@@ -7,7 +7,7 @@ import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.TiffDecoder
 import io.github.baeseungwon1010.officecanvas.metafile.WmfRenderer
-import io.github.baeseungwon1010.officecanvas.ppt.Ole2Reader
+import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import io.github.baeseungwon1010.officecanvas.ppt.PptGeometry
 import io.github.baeseungwon1010.officecanvas.ppt.Rec
 import io.github.baeseungwon1010.officecanvas.ppt.RecordReader

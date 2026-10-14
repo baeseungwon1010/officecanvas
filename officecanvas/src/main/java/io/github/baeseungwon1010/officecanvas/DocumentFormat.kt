@@ -1,6 +1,6 @@
 package io.github.baeseungwon1010.officecanvas
 
-import io.github.baeseungwon1010.officecanvas.ppt.Ole2Reader
+import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import java.io.File
 import java.util.zip.ZipFile
 

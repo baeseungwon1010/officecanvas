@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.ppt
 
+import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.slide.Box
 import io.github.baeseungwon1010.officecanvas.slide.Deck

@@ -1,4 +1,4 @@
-package io.github.baeseungwon1010.officecanvas.ppt
+package io.github.baeseungwon1010.officecanvas.ole
 
 import io.github.baeseungwon1010.officecanvas.util.Limits
 import java.io.ByteArrayOutputStream
@@ -8,10 +8,9 @@ import java.nio.ByteOrder
 
 /**
  * Minimal reader for the OLE2/CFB (Compound File Binary) container format —
- * the outer shell of the legacy binary .ppt (and .doc, .xls) formats, replaced
- * by zip-of-XML in the 2007+ Office formats. Read-only, and only what's needed
- * to pull named top-level streams out by name (a .ppt's "PowerPoint Document"
- * and "Current User"): no storage traversal beyond the root, no write support.
+ * the outer shell of the legacy binary .ppt (and .doc, .xls) formats and of
+ * Hangul's .hwp, replaced by zip-of-XML in the newer formats. Read-only: streams
+ * are read by path ("BodyText/Section0") or, at the top level, by name.
  *
  * Spec: [MS-CFB] (Microsoft's own published Compound File Binary spec).
  *
@@ -43,6 +42,7 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
     private val miniStreamFirstSector: Int
     private val miniStreamSize: Long
     private val streams = mutableMapOf<String, Entry>()
+    private val paths = mutableMapOf<String, Entry>()
 
     private data class Entry(val firstSector: Int, val size: Long)
 
@@ -111,29 +111,45 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
             }
         }
 
-        // Directory entries (128 bytes each) form a tree via sibling/child ids;
-        // only what's needed here — name, size, type, and the mini-stream location
-        // the root entry carries — is read out of it, not the tree structure.
+        // Directory entries (128 bytes each): name, type, sibling and child ids,
+        // first sector and size.
         val dirBytes = readChain(firstDirSector, -1)
         val dirBuf = ByteBuffer.wrap(dirBytes).order(ByteOrder.LITTLE_ENDIAN)
         val entryCount = dirBytes.size / 128
         var rootFirstSector = ENDOFCHAIN
         var rootSize = 0L
+        class Dir(val name: String, val type: Int, val left: Int, val right: Int, val child: Int, val start: Int, val size: Long)
+        val dirs = ArrayList<Dir?>(entryCount)
         for (i in 0 until entryCount) {
             val off = i * 128
             val nameLenBytes = dirBuf.getShort(off + 64).toInt() and 0xFFFF
-            if (nameLenBytes <= 0) continue
-            val objectType = dirBytes[off + 66].toInt()
+            if (nameLenBytes <= 0 || nameLenBytes > 64) { dirs += null; continue }
             // nameLenBytes counts the trailing null terminator; the actual name is
             // one UTF-16 code unit (2 bytes) shorter.
             val name = String(dirBytes, off, (nameLenBytes - 2).coerceAtLeast(0), Charsets.UTF_16LE)
-            val startSector = dirBuf.getInt(off + 116)
-            val size = dirBuf.getLong(off + 120)
-            when (objectType) {
-                5 -> { rootFirstSector = startSector; rootSize = size } // root storage: owns the mini stream
-                2 -> streams[name] = Entry(startSector, size) // stream
+            dirs += Dir(name, dirBytes[off + 66].toInt(), dirBuf.getInt(off + 68), dirBuf.getInt(off + 72),
+                dirBuf.getInt(off + 76), dirBuf.getInt(off + 116), dirBuf.getLong(off + 120))
+        }
+        dirs.firstOrNull { it?.type == 5 }?.let { rootFirstSector = it.start; rootSize = it.size } // root: owns the mini stream
+
+        // Storages form a tree: each storage's children are a binary tree of
+        // siblings (left/right) hanging off its child id. Streams are recorded by
+        // their full path ("BodyText/Section0") and, for top-level ones, by name.
+        val seen = java.util.BitSet()
+        fun walk(id: Int, prefix: String) {
+            if (id !in dirs.indices || seen[id]) return
+            seen.set(id)
+            val d = dirs[id] ?: return
+            walk(d.left, prefix)
+            walk(d.right, prefix)
+            when (d.type) {
+                2 -> paths["$prefix${d.name}"] = Entry(d.start, d.size)
+                1 -> walk(d.child, "$prefix${d.name}/")
             }
         }
+        dirs.indexOfFirst { it?.type == 5 }.takeIf { it >= 0 }?.let { root -> seen.set(root); walk(dirs[root]!!.child, "") }
+        // Fall back to every stream by bare name when the tree is damaged.
+        for (d in dirs) if (d != null && d.type == 2) streams.putIfAbsent(d.name, Entry(d.start, d.size))
 
         miniFat = if (numMiniFatSectors > 0 && rootFirstSector != ENDOFCHAIN) {
             val miniFatBytes = readChain(firstMiniFatSector, -1)
@@ -146,9 +162,13 @@ internal class Ole2Reader private constructor(private val bytes: ByteArray) {
         miniStreamSize = rootSize
     }
 
-    /** Reads a named top-level stream in full, or null if it doesn't exist. */
+    /** Paths of all streams, storages separated by '/'. */
+    val streamPaths: Set<String> get() = paths.keys
+
+    /** Reads a stream by path ("BodyText/Section0") or top-level name, or null if
+     *  it doesn't exist. */
     fun readStream(name: String): ByteArray? {
-        val entry = streams[name] ?: return null
+        val entry = paths[name] ?: streams[name] ?: return null
         return if (entry.size >= miniStreamCutoff) {
             readChain(entry.firstSector, entry.size)
         } else {

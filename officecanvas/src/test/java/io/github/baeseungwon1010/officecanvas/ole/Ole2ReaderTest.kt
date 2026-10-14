@@ -1,4 +1,4 @@
-package io.github.baeseungwon1010.officecanvas.ppt
+package io.github.baeseungwon1010.officecanvas.ole
 
 import org.junit.Assert.*
 import org.junit.Test
