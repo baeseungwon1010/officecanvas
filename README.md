@@ -86,7 +86,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Shape outlines | ~65 presets + freeforms | freeforms + common presets |
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular |
 | Outer shadows | ✓ (shapes and pictures, incl. theme effect styles) | — |
-| Tables | ✓ incl. table styles | as the shapes PowerPoint stores |
+| Tables | ✓ incl. table styles; rows grow to fit their text | as the shapes PowerPoint stores |
 | SmartArt | from the drawing PowerPoint saves with it | — |
 | Charts | bar and column (clustered, stacked, 100%), line, area, pie, doughnut, from the values cached in the chart part; title, legend, axis and value labels | — |
 | Pictures | PNG, JPEG, EMF, WMF, SVG; crop | PNG, JPEG, EMF, WMF, DIB, TIFF, PICT with embedded JPEG/PNG; crop |
