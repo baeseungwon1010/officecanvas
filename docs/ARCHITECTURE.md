@@ -42,6 +42,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `HwpxModel.kt`: pages of lines (each a list of styled spans with the line's position, width, baseline and alignment), tables (cells with borders, fill, vertical alignment and their own lines, tables and pictures), pictures (with crop) and drawing objects (outlines with fill, line and text box content; groups as drawings holding drawings), in HWPUNIT (7200 per inch) relative to the body area.
 - `HwpxParser`: OWPML (the HWPX XML).
 - `PageFlow`: splits a section's positioned elements into pages and continues tables and floating objects on the next page.
+- `Numbering.kt`: paragraph numbers and bullets, counted through the document and put in front of a paragraph's first line.
 - `PageDecor`: headers, footers and the page number for each page (odd and even, changing where their controls appear), and where an object placed relative to its paragraph goes.
 - `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
 

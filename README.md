@@ -100,6 +100,7 @@ Not rendered: scatter, radar and 3-D charts, shadows, glow, 3-D effects, text hi
 | Lines and page breaks where Hangul saved them | ✓ | ✓ |
 | Character styles, several per line (size, color, bold, italic, underline, 장평, 자간, super/subscript) | ✓ | ✓ (and strikethrough) |
 | Paragraph alignment (left, right, center, justify, distribute) and tabs | ✓ | ✓ |
+| Paragraph numbers, outline numbers and bullets | ✓ | ✓ |
 | Fonts | serif or sans-serif chosen from the face name; Latin text in the bundled metric-compatible fonts | same |
 | Tables: cell borders, fills, vertical alignment, nested tables | ✓ | ✓ (gradient fills as their average color) |
 | Tables continued across pages | ✓ | ✓ |
