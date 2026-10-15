@@ -38,6 +38,16 @@ The Hangul generators lay text out with fixed metrics instead of a real layout e
 
 `AndroidXmlParserTest` parses the sample documents with Android's own XML parser (shipped in Robolectric's android-all), because the JDK parser unit tests otherwise use accepts hardening options that Android's rejects.
 
+## Rendering on a device
+
+Robolectric draws with the JVM's Skia, but a device has its own fonts (Hangul comes from the system's Noto CJK), text shaping and memory limits. `DeviceRenderTool` (in `androidTest`) renders documents on a connected device or emulator and writes the pages as PNGs:
+
+```
+ANDROID_SERIAL=emulator-5554 tools/device_render.sh outdir doc.hwp deck.pptx ...
+```
+
+The script installs the test APK, pushes the documents into its external files directory, runs the tool and pulls `outdir/<name>/ours_N.png` back, with each document's render time (not counting saving the PNGs) in `outdir/TIMES`. The tool is skipped when given nothing to render, so `connectedAndroidTest` stays a no-op. On an Android 14 x86_64 emulator (software rendering), a 75-slide `.ppt` lecture takes about 8 s and a 68-page `.hwp` about 6 s.
+
 ## Comparing against LibreOffice
 
 ```
