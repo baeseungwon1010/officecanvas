@@ -63,7 +63,7 @@ For `.hwp` and `.hwpx`, LibreOffice needs the H2Orestart import filter; set `LO_
 
 Compare at the size the library renders by default (1600 px). At much smaller sizes pixel rounding dominates the numbers, and shrink-on-overflow can trigger where it shouldn't.
 
-On the generated sample deck, every baseline is within 0.6 pt of LibreOffice's. On a real 75-slide `.ppt` lecture deck, 66 slides have every baseline within 6 pt; most of the rest differ by a few points in regions with many empty lines.
+On the generated sample deck, every baseline is within 0.6 pt of LibreOffice's. On a real 75-slide `.ppt` lecture deck, 64 slides have every baseline within 6 pt; most of the rest are text shrunk to fit, where the renderer follows PowerPoint's steps (see FORMAT_NOTES) and LibreOffice its own, or differ by a few points in regions with many empty lines.
 
 For `.pptx`, `RenderFileTool` also accepts a directory (`-Pofficecanvas.input=<dir>`) and renders every document in it into its own subdirectory, which makes it practical to score a whole set of decks after each change. On 34 real decks (447 slides) the mean difference score is 1.8; the largest remaining differences are 3-D perspective and Hangul set in different fallback fonts.
 
