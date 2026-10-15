@@ -85,7 +85,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Lines, connectors, arrowheads, flipped shapes | ✓ (straight, elbow, curved) | ✓ |
 | Shape outlines | ~65 presets + freeforms | freeforms + common presets |
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular |
-| Outer shadows | ✓ (shapes and pictures, incl. theme effect styles) | — |
+| Outer shadows | ✓ (shapes, pictures and text, incl. theme effect styles) | — |
 | Groups turned and flipped, group fill | ✓ | as the shapes PowerPoint stores |
 | 3-D rotation and extrusion | approximated: the shape drawn into its turned plane, the extrusion swept behind it | — |
 | Tables | ✓ incl. table styles; rows grow to fit their text | as the shapes PowerPoint stores |
@@ -95,7 +95,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Slide background | solid, gradient, picture | solid, picture, gradient |
 | Hidden slides | skipped | skipped, as PowerPoint's own export does |
 
-Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, bevels and 3-D lighting, text shadows, animations, video, embedded OLE objects other than their preview picture.
+Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, bevels and 3-D lighting, animations, video, embedded OLE objects other than their preview picture.
 
 ### Hangul documents
 

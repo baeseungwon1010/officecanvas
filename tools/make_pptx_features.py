@@ -16,8 +16,9 @@ tests check exactly (PptxParserTest, SlideRendererTest).
   7. a table in PowerPoint's default style (stored by id only), and one with no
      style whose rows are saved shorter than their text
   8. effects: a hard outer shadow, an empty effect list overriding the style's
-     theme shadow, white text on a highlight, a turned and flipped group whose
-     member takes the group's fill, a shape turned and extruded in 3-D
+     theme shadow, white text on a highlight and white text with its own
+     shadow, a turned and flipped group whose member takes the group's fill, a
+     shape turned and extruded in 3-D
   9. a hidden slide (skipped)
 Run: python3 make_pptx_features.py <outdir>, or tools/build_fixtures.sh"""
 import copy
@@ -192,6 +193,14 @@ run.font.size = Pt(40)
 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 hl = etree.SubElement(run._r.get_or_add_rPr(), qn("a:highlight"))
 etree.SubElement(hl, qn("a:srgbClr"), val="FFC000")
+# and text with a hard shadow of its own, down and to the right.
+run = tf.paragraphs[0].add_run()
+run.text = " shadowed"
+run.font.size = Pt(40)
+run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+fx = etree.SubElement(run._r.get_or_add_rPr(), qn("a:effectLst"))
+shadow = etree.SubElement(fx, qn("a:outerShdw"), blurRad="0", dist="50800", dir="2700000", rotWithShape="0")
+etree.SubElement(shadow, qn("a:srgbClr"), val="000000")
 
 # A group filled red, turned 90 degrees and flipped, whose rectangle takes the
 # group's fill (<a:grpFill/>); and a rectangle turned 60 degrees about the

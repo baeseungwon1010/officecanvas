@@ -712,6 +712,14 @@ internal object SlideRenderer {
 
     private const val WORD_JOINER = '\u2060'
 
+    /** A shadow behind the letters, blurred as a shape's shadow is ([drawShadow]). */
+    private class TextShadowSpan(private val shadow: Shadow, private val scale: Double) : android.text.style.CharacterStyle() {
+        override fun updateDrawState(tp: android.text.TextPaint) {
+            val radius = (shadow.blurEmu * scale / 2).toFloat().coerceIn(0.5f, 200f)
+            tp.setShadowLayer(radius, (shadow.dxEmu * scale).toFloat(), (shadow.dyEmu * scale).toFloat(), shadow.argb)
+        }
+    }
+
     private fun buildLayout(
         p: Paragraph, width: Int, scale: Double, shrink: Float,
         inlineBullet: Boolean, firstLineIndent: Float, restIndent: Float = 0f, layoutOriginPx: Float = 0f
@@ -738,6 +746,7 @@ internal object SlideRenderer {
             spannable.setSpan(SizeSpan(sizePx), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(android.text.style.ForegroundColorSpan(run.colorArgb), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             run.highlightArgb?.let { spannable.setSpan(android.text.style.BackgroundColorSpan(it), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
+            run.shadow?.let { spannable.setSpan(TextShadowSpan(it, scale), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
             val kind = fonts?.let { OfficeFonts.kindFor(run.fontFamily) }
             val face = kind?.let { fonts?.typeface(it, run.bold, run.italic) }
             // A loaded bold/italic font file already is the style; StyleSpan is only

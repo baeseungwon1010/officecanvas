@@ -296,7 +296,8 @@ private fun Theme.run(node: Element, text: String, paragraph: LevelStyle, fontSc
         fontFamily = family,
         // Superscript/subscript offset, in 1/1000 of a percent.
         baselinePercent = rPr?.longOrNull("baseline")?.let { it / 1000f } ?: 0f,
-        highlightArgb = colorIn(rPr?.child(NS_A, "highlight"))
+        highlightArgb = colorIn(rPr?.child(NS_A, "highlight")),
+        shadow = shadowOf(rPr?.child(NS_A, "effectLst"))
     )
 }
 

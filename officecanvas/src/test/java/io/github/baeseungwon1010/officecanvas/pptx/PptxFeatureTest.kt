@@ -85,6 +85,18 @@ class PptxFeatureTest {
     }
 
     @Test
+    fun `a run's own outer shadow is kept for its letters`() {
+        val runs = shapes(7).mapNotNull { it.text }.flatMap { it.paragraphs }.flatMap { it.runs }
+        assertNull(runs.single { it.text == "highlighted" }.shadow)
+        // 50800 EMU at 45 degrees, no blur.
+        val shadow = runs.single { it.text == " shadowed" }.shadow!!
+        assertEquals(0xFF000000.toInt(), shadow.argb)
+        assertEquals(35921.0, shadow.dxEmu.toDouble(), 2.0)
+        assertEquals(35921.0, shadow.dyEmu.toDouble(), 2.0)
+        assertEquals(0L, shadow.blurEmu)
+    }
+
+    @Test
     fun `scheme colors take their luminance modifiers`() {
         // accent2 C0504D at lumMod 50% is about #632523.
         val (r, g, b) = rgb(shapes(0)[1].fillArgb!!)

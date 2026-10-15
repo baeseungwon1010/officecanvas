@@ -190,5 +190,7 @@ internal data class Run(
     /** Superscript (> 0) / subscript (< 0) offset as a percent of the line height. */
     val baselinePercent: Float = 0f,
     /** Text highlight (a marker-pen background behind the run), if any. */
-    val highlightArgb: Int? = null
+    val highlightArgb: Int? = null,
+    /** An outer shadow behind the letters (<a:effectLst> in the run's properties). */
+    val shadow: Shadow? = null
 )
