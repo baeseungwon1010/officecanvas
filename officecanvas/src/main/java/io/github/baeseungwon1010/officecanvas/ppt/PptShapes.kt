@@ -10,6 +10,7 @@ import io.github.baeseungwon1010.officecanvas.slide.Element
 import io.github.baeseungwon1010.officecanvas.slide.TextBody
 import io.github.baeseungwon1010.officecanvas.slide.VAnchor
 import io.github.baeseungwon1010.officecanvas.util.Limits
+import io.github.baeseungwon1010.officecanvas.util.RecentBytes
 import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 
 private const val EMU_PER_MASTER_UNIT = 1587.5
@@ -174,25 +175,15 @@ internal class BlipStore(private val read: ((offset: Long, length: Int) -> ByteA
         return Blip(PictureData(kind) { load(pib, offset, length) })
     }
 
-    /** Pictures read lately, by pib, up to [CACHE_BYTES] in all: a logo on every
-     *  slide is read and inflated once, not once per slide. */
-    private val recent = object : LinkedHashMap<Int, ByteArray>(16, 0.75f, true) {}
-    private var recentBytes = 0L
+    /** A logo on every slide is read and inflated once, not once per slide. */
+    private val recent = RecentBytes<Int>(CACHE_BYTES)
 
-    private fun load(pib: Int, offset: Long, length: Int): ByteArray? = synchronized(recent) {
-        recent[pib]?.let { return it }
-        val bytes = try {
+    private fun load(pib: Int, offset: Long, length: Int): ByteArray? = recent.get(pib) {
+        try {
             read?.invoke(offset, 8 + length)?.let { extract(RecordReader(it)) }
         } catch (e: java.io.IOException) {
             null // the file was closed or can't be read any more
-        } ?: return null
-        if (bytes.size <= CACHE_BYTES / 4) {
-            recent[pib] = bytes
-            recentBytes += bytes.size
-            val it = recent.entries.iterator()
-            while (recentBytes > CACHE_BYTES && it.hasNext()) { recentBytes -= it.next().value.size; it.remove() }
         }
-        bytes
     }
 
     /** The picture in the blip record at the start of [r]. */
