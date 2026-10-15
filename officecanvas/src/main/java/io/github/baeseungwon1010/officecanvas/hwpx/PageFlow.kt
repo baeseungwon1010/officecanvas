@@ -17,6 +17,8 @@ internal class PageFlow(private val bodyHeightHu: Long) {
     private companion object {
         /** Room below which a row isn't cut (about two lines of text). */
         const val MIN_SPLIT_HU = 1500L
+        /** About a line: how far into a wrapped object a line must start to be moved below it. */
+        const val WRAP_SLACK_HU = 1000L
     }
 
     val pages = mutableListOf<MutableList<HwpxElement>>(mutableListOf())
@@ -41,18 +43,81 @@ internal class PageFlow(private val bodyHeightHu: Long) {
      * [floating]: an object placed by offsets rather than in a line; it never
      * starts a page.
      */
-    fun add(el: HwpxElement, startsPage: Boolean = false, startsLine: Boolean = true, floating: Boolean = false) {
-        if (!floating) {
-            val wrapped = if (startsLine) el.yHu <= lastY else el.yHu < lastY
-            if (wrapped || (startsPage && pages.last().isNotEmpty())) newPage()
-            lastY = el.yHu
-            settlePending(el.yHu)
-        }
-        if (floating && bodyHeightHu > 0 && el.yHu + heightOf(el) > bodyHeightHu * 102 / 100 && heightOf(el) <= bodyHeightHu) {
-            pending += Pending(el, pages.size - 1)
+    fun add(
+        el: HwpxElement, startsPage: Boolean = false, startsLine: Boolean = true,
+        floating: Boolean = false, takesLines: Boolean = false, movesWithText: Boolean = false
+    ) {
+        if (floating) {
+            // An object placed from its paragraph moves with the text pushed down.
+            @Suppress("NAME_SHADOWING")
+            val el = if (movesWithText && shift != 0L) el.at(el.xHu, el.yHu + shift) else el
+            // A table text wraps above and below runs over pages as one in a line
+            // does; what follows starts below its last piece.
+            if (takesLines && el is HwpxElement.Table && bodyHeightHu > 0 && el.yHu + el.heightHu > bodyHeightHu * 102 / 100) {
+                place(el)
+                tableAbove = (if (pages.last().lastOrNull() === el) el.yHu else -1L) to tableEnd
+                return
+            }
+            if (takesLines) keepOut += el.yHu to el.yHu + heightOf(el)
+            if (bodyHeightHu > 0 && el.yHu + heightOf(el) > bodyHeightHu * 102 / 100 && heightOf(el) <= bodyHeightHu) {
+                pending += Pending(el, pages.size - 1)
+                return
+            }
+            place(el)
             return
         }
-        place(el)
+        val wrapped = if (startsLine) el.yHu <= lastY else el.yHu < lastY
+        if (wrapped || (startsPage && pages.last().isNotEmpty())) newPage()
+        lastY = el.yHu
+        settlePending(el.yHu)
+        // What follows a table can't start inside it: a table grown past the size
+        // it was saved with (content bigger than its cells declare) pushes the rest
+        // of the page down rather than being drawn over.
+        tableAbove?.let { (top, bottom) ->
+            if (el.yHu > top) {
+                shift += (bottom - (el.yHu + shift)).coerceAtLeast(0)
+                tableAbove = null
+            }
+        }
+        // Nor inside an object that text wraps above and below. Saved positions
+        // normally already clear it; some writers save lines that don't (the
+        // object grew, or the lines are stale). A line just inside the top is left
+        // alone, in case the object's position is a little off.
+        for ((top, bottom) in keepOut) {
+            val y = el.yHu + shift
+            if (y >= top + WRAP_SLACK_HU && y < bottom - WRAP_SLACK_HU / 4) shift += bottom - y
+        }
+        // A line pushed past the bottom goes on to the next page, and the lines
+        // after it follow it there.
+        if (shift > 0 && startsLine && bodyHeightHu > 0 && el !is HwpxElement.Table &&
+            el.yHu + shift + heightOf(el) > bodyHeightHu * 102 / 100 && !full) {
+            newPage()
+            lastY = el.yHu
+            shift = -el.yHu
+        }
+        val at = if (shift != 0L) el.at(el.xHu, el.yHu + shift) else el
+        place(at)
+        if (at is HwpxElement.Table) tableAbove = (if (pages.last().lastOrNull() === at) el.yHu else -1L) to tableEnd
+    }
+
+    /** How far the rest of the current page is pushed down by tables that grew. */
+    private var shift = 0L
+    /** The last table placed on this page: its saved top and its drawn bottom. */
+    private var tableAbove: Pair<Long, Long>? = null
+    /** Bands of this page taken by objects that text wraps above and below. */
+    private val keepOut = mutableListOf<Pair<Long, Long>>()
+    /** Bottom of the last table piece placed. */
+    private var tableEnd = 0L
+
+    /**
+     * A paragraph with no line of its own to place (blank, or holding only
+     * floating objects) still takes its line at [y]: a line saved higher than the
+     * one before starts a page there too. Call before adding its objects.
+     */
+    fun skipLine(y: Long, startsPage: Boolean) {
+        if (y <= lastY || (startsPage && pages.last().isNotEmpty())) newPage()
+        lastY = y
+        settlePending(y)
     }
 
     /** The page being filled (0-based, counting pages that may end up empty). */
@@ -74,9 +139,13 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         if (full) return
         pages += mutableListOf<HwpxElement>()
         lastY = -1L
+        shift = 0L
+        tableAbove = null
+        keepOut.clear()
     }
 
     private fun place(el: HwpxElement) {
+        if (el is HwpxElement.Table) tableEnd = el.yHu + el.heightHu
         if (el !is HwpxElement.Table || bodyHeightHu <= 0 || el.yHu + el.heightHu <= bodyHeightHu * 102 / 100) {
             pages.last() += el
             return
@@ -86,6 +155,7 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         while (true) {
             if (rest.yHu + rest.heightHu <= bodyHeightHu * 102 / 100) {
                 pages.last() += rest
+                tableEnd = rest.yHu + rest.heightHu
                 return
             }
             var heights = scaledRowHeights(rest)
@@ -106,7 +176,7 @@ internal class PageFlow(private val bodyHeightHu: Long) {
             }
             // A table starting at the top of a page keeps at least one row there.
             if (fit == 0 && rest.yHu <= 0) { fit = 1; used = heights[0] }
-            if (fit >= heights.size) { pages.last() += rest; return }
+            if (fit >= heights.size) { pages.last() += rest; tableEnd = rest.yHu + rest.heightHu; return }
             if (fit > 0) pages.last() += rows(rest, 0, fit, rest.yHu, used)
             // The rest continues at the top of the next page, and what follows the
             // table is placed relative to that page.

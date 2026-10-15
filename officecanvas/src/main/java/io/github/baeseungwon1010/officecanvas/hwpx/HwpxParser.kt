@@ -130,10 +130,17 @@ internal object HwpxParser {
             val forcedBreak = p.getAttribute("pageBreak") == "1"
             val firstLineY = p.child(HP, "linesegarray")?.child(HP, "lineseg")?.longOrNull("vertpos")
             var startPage = flow.pageFor(firstLineY, forcedBreak)
-            for ((k, el) in parseParagraphFlow(p, header, 0).withIndex()) {
-                flow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in state.get().lineStarts,
-                    floating = el in state.get().placedFloating)
-                if (k == 0) startPage = flow.page
+            val elements = parseParagraphFlow(p, header, 0)
+            val noLine = elements.all { it in state.get().placedFloating }
+            if (noLine && firstLineY != null) {
+                flow.skipLine(firstLineY, forcedBreak)
+                startPage = flow.page
+            }
+            for ((k, el) in elements.withIndex()) {
+                flow.add(el, startsPage = k == 0 && forcedBreak && !noLine, startsLine = el in state.get().lineStarts,
+                    floating = el in state.get().placedFloating, takesLines = el in state.get().takingLines,
+                    movesWithText = el in state.get().fromParagraph)
+                if (k == 0 && !noLine) startPage = flow.page
             }
             // Header, footer and page number controls apply from the page their
             // paragraph starts on; hiding applies to that page only.
@@ -206,6 +213,10 @@ internal object HwpxParser {
         /** Objects placed by offsets rather than in a line, before and after placing. */
         val floatingOf = java.util.IdentityHashMap<HwpxElement, Floating>()
         val placedFloating: MutableSet<HwpxElement> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+        /** Placed floating objects that text wraps above and below. */
+        val takingLines: MutableSet<HwpxElement> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+        /** Placed floating objects positioned from their paragraph. */
+        val fromParagraph: MutableSet<HwpxElement> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
         var bodyXHu = 0L
         var bodyYHu = 0L
         var bodyWidthHu = 42520L
@@ -256,7 +267,11 @@ internal object HwpxParser {
             "PAGE" -> f.vertOffset
             else -> paragraphRelativeY(f.vertOffset, f.takesLines, f.keepsBelowAnchor, obj.extentHu, y, textFirstLine, lineHeight)
         }
-        return obj.at(px, py).also { s.placedFloating += it }
+        return obj.at(px, py).also {
+            s.placedFloating += it
+            if (f.takesLines) s.takingLines += it
+            if (f.vertRel != "PAPER" && f.vertRel != "PAGE") s.fromParagraph += it
+        }
     }
 
     /** An object's size from <hp:sz>, which may be a percentage (in 1/100 %) of

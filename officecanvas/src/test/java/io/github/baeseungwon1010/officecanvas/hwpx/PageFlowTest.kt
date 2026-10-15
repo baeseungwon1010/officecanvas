@@ -30,4 +30,58 @@ class PageFlowTest {
         }.map { it.text }
         assertEquals(lines.map { it.text }, shown)
     }
+
+    private fun table(y: Long, height: Long) =
+        HwpxElement.Table(0, y, 40000, height, listOf(40000), listOf(height), listOf(listOf(TableCell(1, 1, emptyList()))))
+
+    private fun texts(page: List<HwpxElement>) = page.filterIsInstance<HwpxElement.TextRun>().map { it.text to it.yHu }
+
+    @Test
+    fun `text saved where a grown table now is goes below it`() {
+        val flow = PageFlow(70000)
+        flow.add(line(0, "title"))
+        flow.add(table(2000, 30000))          // saved as 10000 tall
+        flow.add(line(12000, "after"))
+        flow.add(line(13600, "next"))
+        assertEquals(listOf("title" to 0L, "after" to 32000L, "next" to 33600L), texts(flow.finish().single().value))
+    }
+
+    @Test
+    fun `text saved clear of a table stays where it was`() {
+        val flow = PageFlow(70000)
+        flow.add(table(2000, 10000))
+        flow.add(line(13000, "after"))
+        assertEquals(listOf("after" to 13000L), texts(flow.finish().single().value))
+    }
+
+    @Test
+    fun `a line saved inside an object text wraps around goes below it, and past the page onto the next`() {
+        val flow = PageFlow(70000)
+        flow.add(line(0, "first"))
+        flow.add(table(1600, 60000), floating = true, takesLines = true)
+        flow.add(line(20000, "below"))   // inside the object: moves to 61600
+        flow.add(line(30000, "later"))   // 71600 is past the page: next page
+        flow.add(line(31600, "last"))
+        val pages = flow.finish().map { it.value }
+        assertEquals(listOf("first" to 0L, "below" to 61600L), texts(pages[0]))
+        assertEquals(listOf("later" to 0L, "last" to 1600L), texts(pages[1]))
+    }
+
+    @Test
+    fun `a line just inside the top of a wrapped object stays`() {
+        val flow = PageFlow(70000)
+        flow.add(table(5000, 20000), floating = true, takesLines = true)
+        flow.add(line(5400, "beside"))
+        assertEquals(listOf("beside" to 5400L), texts(flow.finish().single().value))
+    }
+
+    @Test
+    fun `a blank paragraph saved higher than the line before starts a page`() {
+        val flow = PageFlow(70000)
+        flow.add(line(60000, "end of page one"))
+        flow.skipLine(2000, startsPage = false)
+        flow.add(line(3600, "page two"))
+        val pages = flow.finish().map { it.value }
+        assertEquals(listOf(listOf("end of page one" to 60000L), listOf("page two" to 3600L)), pages.map { texts(it) })
+    }
 }

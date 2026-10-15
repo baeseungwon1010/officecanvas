@@ -483,10 +483,19 @@ internal object HwpParser {
                 // break's first line is at the top like the previous page's, so the
                 // flag is what tells them apart.
                 val forcedBreak = para.body.u8(11) and 0x05 != 0
-                var startPage = pageFlow.pageFor(lineSegs(para).firstOrNull()?.y, forcedBreak)
-                for ((k, el) in paragraph(para, 0).withIndex()) {
-                    pageFlow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in lineStarts, floating = el in placedFloating)
-                    if (k == 0) startPage = pageFlow.page
+                val firstLineY = lineSegs(para).firstOrNull()?.y
+                var startPage = pageFlow.pageFor(firstLineY, forcedBreak)
+                val elements = paragraph(para, 0)
+                // A paragraph with no line to place still takes its line (see PageFlow.skipLine).
+                val noLine = elements.all { it in placedFloating }
+                if (noLine && firstLineY != null) {
+                    pageFlow.skipLine(firstLineY, forcedBreak)
+                    startPage = pageFlow.page
+                }
+                for ((k, el) in elements.withIndex()) {
+                    pageFlow.add(el, startsPage = k == 0 && forcedBreak && !noLine, startsLine = el in lineStarts, floating = el in placedFloating, takesLines = el in takingLines,
+                        movesWithText = el in fromParagraph)
+                    if (k == 0 && !noLine) startPage = pageFlow.page
                 }
                 // These controls apply from the page their paragraph starts on
                 // (hiding to that page only).
@@ -645,6 +654,8 @@ internal object HwpParser {
             }
             val placed = obj.at(x, y)
             if (floating != null) placedFloating += placed
+            if (floating?.takesLines == true) takingLines += placed
+            if (floating != null && floating.vertRel != 0 && floating.vertRel != 1) fromParagraph += placed
             return placed
         }
 
@@ -657,6 +668,10 @@ internal object HwpParser {
         private val lineStarts = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>())
         /** Floating objects once placed. */
         private val placedFloating = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>())
+        /** Placed floating objects that text wraps above and below. */
+        private val takingLines = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>())
+        /** Placed floating objects positioned from their paragraph. */
+        private val fromParagraph = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>())
 
         /** A table or picture control; null for every other kind. */
         private fun control(ctrl: Record, depth: Int): HwpxElement? {
