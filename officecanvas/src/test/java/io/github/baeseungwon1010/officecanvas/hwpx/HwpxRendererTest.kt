@@ -163,6 +163,25 @@ class HwpxRendererTest {
         assertColor(listOf(40, 70, 200), render(page).pixelAt(doc.pages[page], image.xHu + image.widthHu / 4, image.yHu + image.heightHu / 2))
     }
 
+    @Test
+    fun `a picture is found by its exact name, not one that starts the same`() {
+        fun png(color: Int): ByteArray {
+            val b = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(color) }
+            return java.io.ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        }
+        // image10 comes first in the zip; the picture names image1.
+        val file = File.createTempFile("pictures", ".hwpx").apply { deleteOnExit() }
+        java.util.zip.ZipOutputStream(file.outputStream()).use { z ->
+            for ((name, color) in listOf("BinData/image10.png" to 0xFF0000FF.toInt(), "BinData/image1.png" to 0xFFFF0000.toInt())) {
+                z.putNextEntry(java.util.zip.ZipEntry(name)); z.write(png(color)); z.closeEntry()
+            }
+        }
+        val page = HwpxPage(10000, 10000, listOf(HwpxElement.ImageEl(0, 0, 10000, 10000, "image1")))
+        var bitmap: Bitmap? = null
+        HwpxRenderer.render(HwpxDoc(listOf(page)), file, 100) { _, b -> bitmap = b }
+        assertColor(listOf(255, 0, 0), bitmap!!.pixelAt(page, 5000, 5000))
+    }
+
     private fun render(page: Int, longSide: Int = 1000): Bitmap {
         var bitmap: Bitmap? = null
         HwpxRenderer.render(doc.copy(pages = listOf(doc.pages[page])), sample("sample.hwpx"), longSide) { _, b -> bitmap = b }

@@ -386,8 +386,9 @@ internal object HwpxRenderer {
             // BinData/<id>.<ext>: the reference in the XML omits the extension, so the
             // matching zip entry is found by prefix rather than assumed.
             val name = image.zipEntry ?: return
+            // (Exactly that name before the extension: "image1" must not find image10.png.)
             val entry = zip?.entries()?.asSequence()?.firstOrNull {
-                it.name.startsWith("BinData/$name") || it.name.startsWith("BinData/$name.")
+                it.name == "BinData/$name" || it.name.startsWith("BinData/$name.")
             } ?: return
             zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES)
         } ?: return
