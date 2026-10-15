@@ -163,7 +163,7 @@ class HwpParserTest {
     @Test
     fun `pictures come from BinData and are drawn`() {
         val image = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.ImageEl>().single()
-        val png = image.bytes!!
+        val png = image.bytes!!()!!
         assertEquals(0x89.toByte(), png[0])
         assertEquals('P'.code.toByte(), png[1])
 

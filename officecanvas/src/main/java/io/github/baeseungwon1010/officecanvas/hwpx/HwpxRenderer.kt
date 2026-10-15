@@ -382,7 +382,7 @@ internal object HwpxRenderer {
             (image.xHu * scale).toFloat(), (image.yHu * scale).toFloat(),
             ((image.xHu + image.widthHu) * scale).toFloat(), ((image.yHu + image.heightHu) * scale).toFloat()
         )
-        val bytes = image.bytes ?: run {
+        val bytes = image.bytes?.invoke() ?: run {
             // BinData/<id>.<ext>: the reference in the XML omits the extension, so the
             // matching zip entry is found by prefix rather than assumed.
             val name = image.zipEntry ?: return

@@ -22,7 +22,12 @@ package io.github.baeseungwon1010.officecanvas.hwpx
 
 internal const val HWPUNIT_PER_INCH = 7200.0
 
-internal data class HwpxDoc(val pages: List<HwpxPage>)
+internal data class HwpxDoc(
+    val pages: List<HwpxPage>,
+    /** The open file pictures are read from as they are drawn (a .hwp's);
+     *  whoever renders the document closes it afterwards. */
+    val resources: java.io.Closeable? = null
+)
 
 /** Element positions are relative to the body area, as Hangul saves them;
  *  [bodyXHu]/[bodyYHu] is where that area starts on the page. */
@@ -135,9 +140,10 @@ internal sealed class HwpxElement {
         val widthHu: Long,
         val heightHu: Long,
         /** Entry name inside the .hwpx zip, e.g. "BinData/image1.png"; null when
-         *  [bytes] holds the picture (a .hwp keeps pictures in OLE2 streams). */
+         *  [bytes] reads the picture (a .hwp keeps pictures in OLE2 streams, read
+         *  from the file only when drawn). */
         val zipEntry: String?,
-        val bytes: ByteArray? = null,
+        val bytes: (() -> ByteArray?)? = null,
         /** Fractions of the source image trimmed from each edge. */
         val crop: ImageCrop? = null
     ) : HwpxElement()

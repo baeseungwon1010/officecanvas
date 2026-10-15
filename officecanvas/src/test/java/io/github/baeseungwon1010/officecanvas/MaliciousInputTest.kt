@@ -488,7 +488,7 @@ class MaliciousInputTest {
         val random = java.util.Random(7)
         repeat(20) {
             val junk = ByteArray(4096).also { random.nextBytes(it) }
-            survives(5) { HwpParser.fromStreams(junk, sequenceOf(junk, junk)) { _, _, _ -> junk } }
+            survives(5) { HwpParser.fromStreams(junk, sequenceOf(junk, junk)) { _, _, _ -> { junk } } }
         }
     }
 }

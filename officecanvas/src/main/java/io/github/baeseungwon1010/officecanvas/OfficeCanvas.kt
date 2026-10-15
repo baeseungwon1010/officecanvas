@@ -75,10 +75,18 @@ object OfficeCanvas {
                         deck.resources?.close()
                     }
                 }
-                DocumentFormat.HWPX -> HwpxRenderer.render(HwpxParser.parse(file), file, longSidePx, counting)
-                DocumentFormat.HWP -> HwpxRenderer.render(
-                    if (HwpmlParser.isHwpml(file)) HwpmlParser.parse(file) else HwpParser.parse(file), file, longSidePx, counting
-                )
+                DocumentFormat.HWPX, DocumentFormat.HWP -> {
+                    val doc = when {
+                        kind == DocumentFormat.HWPX -> HwpxParser.parse(file)
+                        HwpmlParser.isHwpml(file) -> HwpmlParser.parse(file)
+                        else -> HwpParser.parse(file)
+                    }
+                    try {
+                        HwpxRenderer.render(doc, file, longSidePx, counting)
+                    } finally {
+                        doc.resources?.close()
+                    }
+                }
             }
         } catch (e: OfficeCanvasException) {
             throw e

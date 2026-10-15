@@ -49,7 +49,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `PageDecor`: headers, footers and the page number for each page (odd and even, changing where their controls appear), and where an object placed relative to its paragraph goes.
 - `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
 
-**`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model. `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
+**`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model; pictures stay in the file until drawn, as in `.ppt` (`HwpxDoc.resources`). `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
 
 **`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree). It reads streams from the file when asked for rather than loading the file whole; close it when done.
 

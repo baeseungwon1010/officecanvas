@@ -36,6 +36,7 @@ import io.github.baeseungwon1010.officecanvas.hwpx.spansOf
 import io.github.baeseungwon1010.officecanvas.hwpx.inlineSpan
 import io.github.baeseungwon1010.officecanvas.hwpx.TableCell
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
+import io.github.baeseungwon1010.officecanvas.util.RecentBytes
 import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import java.io.File
@@ -119,7 +120,14 @@ internal object HwpParser {
         } catch (e: Ole2Reader.FormatException) {
             throw ParseException("not a .hwp: ${e.message}", e)
         }
-        return ole.use { parse(it) }
+        // The file stays open while pictures may be drawn (they are read from it
+        // then); OfficeCanvas closes it through HwpxDoc.resources.
+        var keep = false
+        try {
+            return parse(ole).also { keep = it.resources != null }
+        } finally {
+            if (!keep) ole.close()
+        }
     }
 
     private fun parse(ole: Ole2Reader): HwpxDoc {
@@ -139,27 +147,42 @@ internal object HwpParser {
             Regex("BodyText/Section(\\d+)").matchEntire(p)?.groupValues?.get(1)?.toIntOrNull()?.let { it to p }
         }.sortedBy { it.first }.map { it.second }
         if (sections.isEmpty()) throw ParseException("no BodyText sections")
-        return fromStreams(docInfo, sections.asSequence().map { stream(it) }) { id, ext, compression ->
+        var pictures = false
+        val recent = RecentBytes<String>(32L shl 20)
+        val doc = fromStreams(docInfo, sections.asSequence().map { stream(it) }) { id, ext, compression ->
             val deflate = when (compression) { 1 -> true; 2 -> false; else -> compressed }
-            listOf(ext, ext.lowercase(), ext.uppercase()).distinct()
-                .firstNotNullOfOrNull { ole.readStream("BinData/BIN%04X.%s".format(id, it)) }
-                ?.let { if (deflate) inflate(it) ?: it else it }
+            val path = listOf(ext, ext.lowercase(), ext.uppercase()).distinct()
+                .map { "BinData/BIN%04X.%s".format(id, it) }.firstOrNull { ole.hasStream(it) } ?: return@fromStreams null
+            pictures = true
+            // Read (and inflated) when drawn; a logo on every page only once.
+            return@fromStreams {
+                recent.get(path) {
+                    try {
+                        ole.readStream(path)?.let { if (deflate) inflate(it) ?: it else it }
+                    } catch (e: java.io.IOException) {
+                        null // the file was closed or can't be read any more
+                    }
+                }
+            }
         }
+        return if (pictures) doc.copy(resources = ole) else doc
     }
 
     /**
      * The document from its decompressed DocInfo and section streams; [binData]
-     * finds a picture by BIN_DATA id, extension and compression setting. Separate
+     * finds a picture by BIN_DATA id, extension and compression setting, giving
+     * back how to read it when drawn (null when there is none). Separate
      * from the container so tests can feed crafted streams directly.
      */
     internal fun fromStreams(
-        docInfo: ByteArray, sections: Sequence<ByteArray?>, binData: (Int, String, Int) -> ByteArray?
+        docInfo: ByteArray, sections: Sequence<ByteArray?>, binData: (Int, String, Int) -> (() -> ByteArray?)?
     ): HwpxDoc {
         val info = DocInfo.read(Bytes(docInfo))
-        val pictures = HashMap<Int, ByteArray?>()
-        fun picture(binItem: Int): ByteArray? = pictures.getOrPut(binItem) {
+        val pictures = HashMap<Int, (() -> ByteArray?)?>()
+        fun picture(binItem: Int): (() -> ByteArray?)? = pictures.getOrPut(binItem) {
             val bin = info.binData.getOrNull(binItem - 1)?.takeIf { it.id >= 0 } ?: return@getOrPut null
-            binData(bin.id, bin.ext, bin.compression)?.takeIf { it.size <= SafeBitmaps.MAX_IMAGE_BYTES }
+            val load = binData(bin.id, bin.ext, bin.compression) ?: return@getOrPut null
+            { load()?.takeIf { it.size <= SafeBitmaps.MAX_IMAGE_BYTES } }
         }
 
         val pages = mutableListOf<HwpxPage>()
@@ -434,7 +457,7 @@ internal object HwpParser {
 
     /** [pageNumber]: the number of the page before the section's first (numbering
      *  runs on through sections); after [read], that of its last page. */
-    private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, var pageNumber: Int, val heads: ParaHead) {
+    private class Section(val info: DocInfo, val picture: (Int) -> (() -> ByteArray?)?, var pageNumber: Int, val heads: ParaHead) {
         /** The numbering outline paragraphs use (the section definition's, 1-based). */
         private var outlineNumbering = 0
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
