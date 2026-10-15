@@ -242,6 +242,12 @@ internal fun buildParagraphs(r: RecordReader, records: List<Rec>, ctx: TextConte
         ?.let { parseStyleRuns(r, it, raw.length + 1) }
 
     val ruler = records.firstOrNull { it.type == RT.TEXT_RULER_ATOM }?.let { readRuler(r, it) }
+    // Hyperlinked ranges (TxInteractiveInfoAtom: first and one-past-last character),
+    // drawn in the color scheme's hyperlink color and underlined, as PowerPoint does.
+    val links = records.filter { it.type == RT.TX_INTERACTIVE_INFO_ATOM && it.length >= 8 }
+        .map { r.i32(it.start) until r.i32(it.start + 4) }.filter { !it.isEmpty() && it.first >= 0 }
+    fun linkAt(i: Int) = links.any { i in it }
+    fun nextLinkEdge(i: Int) = links.flatMap { listOf(it.first, it.last + 1) }.filter { it > i }.minOrNull() ?: Int.MAX_VALUE
     val paragraphs = mutableListOf<Paragraph>()
     val counter = NumberCounter()
     var ps = 0
@@ -258,9 +264,11 @@ internal fun buildParagraphs(r: RecordReader, records: List<Rec>, ctx: TextConte
         var a = ps
         do {
             val (cfOver, runEnd) = style?.cfAt(a) ?: (Cf() to Int.MAX_VALUE)
-            val b = minOf(pe, runEnd).coerceAtLeast(a)
+            val b = minOf(pe, runEnd, nextLinkEdge(a)).coerceAtLeast(a)
             val cf = cfOver.over(masterCf)
-            runs += makeRun(display(a, b), cf, ctx)
+            runs += makeRun(display(a, b), cf, ctx).let { run ->
+                if (b > a && linkAt(a)) run.copy(colorArgb = ctx.scheme[6] ?: run.colorArgb, underline = true) else run
+            }
             a = b
         } while (a < pe)
 

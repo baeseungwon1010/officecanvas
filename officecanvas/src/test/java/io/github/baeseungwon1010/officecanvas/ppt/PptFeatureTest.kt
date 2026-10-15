@@ -6,6 +6,8 @@ import io.github.baeseungwon1010.officecanvas.slide.Element
 import io.github.baeseungwon1010.officecanvas.slide.PathOp
 import io.github.baeseungwon1010.officecanvas.slide.SlideRenderer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,6 +91,16 @@ class PptFeatureTest {
         assertTrue("superscript 2", runs.any { it.text == "2" && it.baselinePercent > 0 })
         assertTrue("subscript 2", runs.any { it.text == "2" && it.baselinePercent < 0 })
         assertTrue("Courier New run", runs.any { it.fontFamily == "Courier New" })
+    }
+
+    @Test
+    fun `hyperlinks take the scheme's hyperlink color and an underline`() {
+        val runs = shapes(4).mapNotNull { it.text }.flatMap { it.paragraphs }.flatMap { it.runs }
+        val link = runs.single { it.text == "example.org" }
+        val plain = runs.single { it.text == "see " }
+        assertTrue(link.underline)
+        assertFalse(plain.underline)
+        assertNotEquals(plain.colorArgb, link.colorArgb)
     }
 
     @Test

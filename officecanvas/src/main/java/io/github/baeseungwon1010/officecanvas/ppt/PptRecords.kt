@@ -22,6 +22,7 @@ internal object RT {
     const val STYLE_TEXT_PROP_ATOM = 0x0FA1
     const val TEXT_MASTER_STYLE_ATOM = 0x0FA3
     const val TEXT_RULER_ATOM = 0x0FA6
+    const val TX_INTERACTIVE_INFO_ATOM = 0x0FDF
     const val TEXT_CF_EXCEPTION_ATOM = 0x0FA4
     const val TEXT_PF_EXCEPTION_ATOM = 0x0FA5
     const val TEXT_BYTES_ATOM = 0x0FA8

@@ -66,6 +66,7 @@ An OLE2 compound file. The streams that matter are `PowerPoint Document` (record
 
 ### Pictures
 
+- **Hyperlinks** in text are `TxInteractiveInfoAtom` records in the text box (the first and one-past-last character of each linked range, after the `InteractiveInfo` container saying what it does). PowerPoint draws them in the color scheme's hyperlink color (entry 6) and underlined.
 - A picture shape's `pib` property is a 1-based index into the drawing group's blip store; each `FBSE` entry's `foDelay` is an offset into the `Pictures` stream.
 - Raster blips start with one or two 16-byte GUIDs and sometimes a tag byte. Scanning for the format's magic bytes is simpler than decoding which of those are present.
 - Metafile blips (EMF, WMF) have a 34-byte header and are usually zlib-compressed. A WMF blip has no placeable header of its own; one is built from the blip header's `rcBounds`.

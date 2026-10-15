@@ -1,7 +1,8 @@
 """Builds feature_test.pptx: one slide per .ppt-parser feature, so converting it
 to binary .ppt with LibreOffice gives a known-content fixture for PptParser tests
 (numbering, freeform/preset outlines, gradients, picture crop, TIFF, sub/superscript,
-monospace font). Run: python3 make_feature_deck.py <outdir>, or tools/build_fixtures.sh"""
+monospace font, a hyperlink).
+Run: python3 make_feature_deck.py <outdir>, or tools/build_fixtures.sh"""
 import io
 import sys
 
@@ -77,6 +78,10 @@ for text, base in [("E=mc", 0), ("2", 30000), (" H", 0), ("2", -25000), ("O", 0)
     if base:
         r._r.get_or_add_rPr().set("baseline", str(base))
 p2 = tf.add_paragraph(); r = p2.add_run(); r.text = "mono text"; r.font.name = "Courier New"; r.font.size = Pt(24)
+# A hyperlink inside a line of plain text.
+p3 = tf.add_paragraph()
+r = p3.add_run(); r.text = "see "; r.font.size = Pt(24)
+r = p3.add_run(); r.text = "example.org"; r.font.size = Pt(24); r.hyperlink.address = "https://example.org/"
 
 # 5: background gradient (white top -> gray bottom), an axial gradient (blue-white-blue,
 #    left to right) and a radial one (white center -> red edge)
