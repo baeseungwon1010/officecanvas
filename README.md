@@ -102,9 +102,10 @@ Not rendered: charts, shadows, glow, 3-D effects, text highlight, animations, vi
 | Fonts | serif or sans-serif chosen from the face name; Latin text in the bundled metric-compatible fonts | same |
 | Tables: cell borders, fills, vertical alignment, nested tables | ✓ | ✓ (gradient fills as their average color) |
 | Tables continued across pages | ✓ | ✓ |
-| Pictures | inline | inline and floating |
-| Headers, footers, page numbers | — | ✓ |
-| Drawing objects (lines, rectangles, text boxes), footnotes, equations, charts, multiple columns | — | — |
+| Pictures | inline and floating; crop | same |
+| Headers and footers (odd/even pages, changing mid-section), page numbers and the page number field | ✓ | ✓ |
+| Drawing objects: lines, rectangles, ellipses, polygons, groups, text boxes | ✓ (arcs and curves through their points) | ✓ |
+| Footnotes, equations, charts, multiple columns | — | — |
 
 ## Fonts
 

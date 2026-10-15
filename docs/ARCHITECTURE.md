@@ -38,9 +38,10 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `PptColors`: color schemes and color references.
 
 **`hwpx`**: the model both Hangul formats produce, and its renderer.
-- `HwpxModel.kt`: pages of lines (each a list of styled spans with the line's position, width, baseline and alignment), tables (cells with borders, fill, vertical alignment and their own lines, tables and pictures) and pictures, in HWPUNIT (7200 per inch) relative to the body area.
+- `HwpxModel.kt`: pages of lines (each a list of styled spans with the line's position, width, baseline and alignment), tables (cells with borders, fill, vertical alignment and their own lines, tables and pictures), pictures (with crop) and drawing objects (outlines with fill, line and text box content; groups as drawings holding drawings), in HWPUNIT (7200 per inch) relative to the body area.
 - `HwpxParser`: OWPML (the HWPX XML).
 - `PageFlow`: splits a section's positioned elements into pages and continues tables and floating objects on the next page.
+- `PageDecor`: headers, footers and the page number for each page (odd and even, changing where their controls appear), and where an object placed relative to its paragraph goes.
 - `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
 
 **`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model.
