@@ -5,7 +5,7 @@ new page shows up as vertpos dropping back to 0. HwpxParser reads exactly that,
 so the layout here is computed with fixed metrics (10pt text, 160% line pitch,
 one full-width character per 1000 HWPUNIT) instead of a real layout engine.
 
-Page furniture and objects: a header with the page number field, a page number
+Page furniture and objects: a header with a tab and the page number field, a page number
 at the bottom center ("- 2 -"), a floating rectangle text box, an inline line and
 a cropped picture.
 Run: python3 make_sample_hwpx.py <outdir>"""
@@ -178,10 +178,11 @@ def object_paragraph(layout, objects, height, width):
 
 
 def header_ctrl():
-    """Header text with the page number field, and the page number at the bottom."""
+    """Header text with a tab (and the width it took) and the page number field,
+    and the page number at the bottom."""
     th, base, spacing = metrics(2)
     return ('<hp:ctrl><hp:header id="1" applyPageType="BOTH"><hp:subList vertAlign="BOTTOM">'
-            '<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="2"><hp:t>OfficeCanvas 샘플 · 쪽 </hp:t>'
+            '<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="2"><hp:t>OfficeCanvas 샘플<hp:tab width="20000" leader="0" type="1"/>쪽 </hp:t>'
             '<hp:ctrl><hp:autoNum num="1" numType="PAGE"><hp:autoNumFormat type="DIGIT"/></hp:autoNum></hp:ctrl>'
             f'<hp:t/></hp:run><hp:linesegarray>{lineseg(0, 0, 2)}</hp:linesegarray></hp:p></hp:subList></hp:header></hp:ctrl>'
             '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>')

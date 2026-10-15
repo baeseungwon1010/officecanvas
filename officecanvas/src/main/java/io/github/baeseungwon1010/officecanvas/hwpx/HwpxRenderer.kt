@@ -74,7 +74,7 @@ internal object HwpxRenderer {
     private fun drawText(canvas: Canvas, run: HwpxElement.TextRun, offsetXHu: Double, offsetYHu: Double, scale: Double): Long {
         if (run.spans.isEmpty()) return 0
         val paints = run.spans.map { paintFor(it, scale) }
-        val widths = run.spans.mapIndexed { i, span -> paints[i].measureText(span.text) }
+        val widths = run.spans.mapIndexed { i, span -> spanWidth(span, paints[i], scale) }
         val natural = widths.sum()
         val avail = (run.widthHu * scale).toFloat()
         // Far wider than its column: the writer saved one line for a whole
@@ -105,6 +105,11 @@ internal object HwpxRenderer {
         for ((i, span) in run.spans.withIndex()) {
             val paint = paints[i]
             val y = baseline - span.style.script * paint.textSize * 0.4f
+            if (span.tabHu != null) {
+                x += spanWidth(span, paint, scale)
+                index += span.text.length
+                continue
+            }
             if (gaps == 0) {
                 canvas.drawText(span.text, x, y, paint)
                 x += paint.measureText(span.text)
@@ -143,7 +148,10 @@ internal object HwpxRenderer {
     ): Long {
         val avail = (run.widthHu * scale).toFloat()
         class Ch(val c: Char, val paint: Int, val w: Float)
-        val chars = run.spans.flatMapIndexed { i, span -> span.text.map { Ch(it, i, paints[i].measureText(it.toString())) } }
+        val chars = run.spans.flatMapIndexed { i, span ->
+            if (span.tabHu != null) listOf(Ch(' ', i, spanWidth(span, paints[i], scale)))
+            else span.text.map { Ch(it, i, paints[i].measureText(it.toString())) }
+        }
         val lines = mutableListOf<List<Ch>>()
         var start = 0
         while (start < chars.size && lines.size < 500) {
@@ -182,6 +190,10 @@ internal object HwpxRenderer {
         }
         return (lines.size - 1).coerceAtLeast(0) * pitchHu
     }
+
+    /** A tab takes the width Hangul saved for it; text, its measured width. */
+    private fun spanWidth(span: Span, paint: Paint, scale: Double): Float =
+        span.tabHu?.let { (it * scale).toFloat() } ?: paint.measureText(span.text)
 
     private fun paintFor(span: Span, scale: Double): Paint {
         val style = span.style

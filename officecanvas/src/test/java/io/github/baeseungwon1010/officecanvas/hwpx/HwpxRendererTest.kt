@@ -65,9 +65,24 @@ class HwpxRendererTest {
     fun `header and page number repeat on every page`() {
         for (i in doc.pages.indices) {
             val r = runs(i)
-            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 샘플 · 쪽 ${i + 1}" && it.yHu < 0 })
+            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 샘플\t쪽 ${i + 1}" && it.yHu < 0 })
             assertTrue("page number on page ${i + 1}", r.any { it.text == "- ${i + 1} -" && it.align == ParaAlign.CENTER })
         }
+    }
+
+    @Test
+    fun `a tab keeps the width Hangul saved for it and moves the text after it`() {
+        val header = runs(0).first { it.text.startsWith("OfficeCanvas") }
+        val tab = header.spans.single { it.text == "\t" }
+        assertEquals(20000L, tab.tabHu)
+        // The text after the tab starts at least the tab's width past the text before it.
+        val bitmap = render(0, 2000)
+        val page = doc.pages[0]
+        val scale = bitmap.height.toDouble() / page.heightHu
+        val row = ((page.bodyYHu + header.yHu + header.baselineHu - 200) * scale).toInt()
+        val inked = (0 until bitmap.width).filter { x -> bitmap.getPixel(x, row) and 0xFF < 128 }
+        val gaps = inked.zipWithNext().map { (a, b) -> b - a }
+        assertTrue("a gap of at least the tab's width: ${gaps.maxOrNull()}", (gaps.maxOrNull() ?: 0) >= (20000 * 0.8 * scale).toInt())
     }
 
     @Test

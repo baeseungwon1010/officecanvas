@@ -2,7 +2,7 @@
 sample.hwpx (headings, body text, a table), plus what the .hwp tests check
 exactly: a centered bold red title, a table cell with a fill and middle vertical
 alignment, an embedded PNG cropped to its right half, a header line ending in
-the page number field, a page number at the bottom center ("- 2 -"), a floating
+a tab and the page number field, a page number at the bottom center ("- 2 -"), a floating
 rectangle text box, an inline line, and a paragraph marked as starting a page
 while its line sits at the top like the one before it.
 
@@ -187,6 +187,7 @@ LEFT, RIGHT, TOP, BOTTOM, HEAD, FOOT = 8504, 8504, 5668, 4252, 4252, 4252
 BODY_W = PAGE_W - LEFT - RIGHT
 BODY_H = PAGE_H - TOP - HEAD - BOTTOM - FOOT
 CHARS = 40
+TAB_WIDTH = 20000  # what Hangul saves as the width a tab took
 LINE = {0: 1600, 1: 2240, 2: 2560, 3: 1440}
 
 
@@ -217,7 +218,9 @@ def paragraph(level, flow, text, shape=0, para_shape=0, controls=b"", ctrl_text=
               width=BODY_W, ctrl_after=b""):
     """controls: CTRL_HEADER records (already at level+1); ctrl_text: their
     8-unit placeholders, which come first in the text (ctrl_after: after it)."""
-    body = ctrl_text + text.encode("utf-16le") + ctrl_after + struct.pack("<H", 13)
+    # A tab is an eight-unit control holding the width it took (HWPUNIT) and its type.
+    tab = struct.pack("<HIH", 9, TAB_WIDTH, 0x100) + b"\0" * 6 + struct.pack("<H", 9)
+    body = ctrl_text + text.encode("utf-16le").replace("\t".encode("utf-16le"), tab) + ctrl_after + struct.pack("<H", 13)
     units = len(body) // 2
     pieces = [text[i:i + CHARS] for i in range(0, len(text), CHARS)] or [""]
     segs = b""
@@ -240,9 +243,9 @@ section = b""
 page_def = struct.pack("<9II", PAGE_W, PAGE_H, LEFT, RIGHT, TOP, BOTTOM, HEAD, FOOT, 0, 0)
 secd = rec(71, 1, struct.pack("<I", 0x73656364) + b"\0" * 32) + rec(73, 2, page_def)
 head_list = rec(72, 2, struct.pack("<HHI", 1, 0, 0) + b"\0" * 26)
-# The header line ends in an auto number field of type 0 (the page number).
+# The header line ends in a tab and an auto number field of type 0 (the page number).
 atno = rec(71, 3, struct.pack("<I", 0x61746E6F) + struct.pack("<I", 0) + b"\0" * 8)
-head_para = paragraph(2, None, "OfficeCanvas 머리말 ", 3, 0, lines_at=[0], ctrl_after=ctrl_chars(18), controls=atno)
+head_para = paragraph(2, None, "OfficeCanvas 머리말\t", 3, 0, lines_at=[0], ctrl_after=ctrl_chars(18), controls=atno)
 head = rec(71, 1, struct.pack("<I", 0x68656164) + struct.pack("<I", 0)) + head_list + head_para
 # Bottom center (5), with "-" as the side character: "- 2 -".
 pgnp = rec(71, 1, struct.pack("<I", 0x70676E70) + struct.pack("<I", 5 << 8) + struct.pack("<HHHH", 0, 0, 0, ord("-")))

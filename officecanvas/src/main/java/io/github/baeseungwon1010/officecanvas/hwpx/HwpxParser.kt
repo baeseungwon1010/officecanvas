@@ -323,6 +323,7 @@ internal object HwpxParser {
         // Marks where each run's text starts in the concatenated stream, so a
         // lineseg slice can look up which run (and therefore which style) covers it.
         val runBoundaries = mutableListOf<Pair<Int, CharStyle>>()
+        val tabWidths = HashMap<Int, Long>()
 
         for (run in p.all(HP, "run")) {
             val charPrId = run.getAttribute("charPrIDRef").ifBlank { null }
@@ -331,7 +332,19 @@ internal object HwpxParser {
                 when (child.localName) {
                     "t" -> {
                         runBoundaries += text.length to style
-                        text.append(child.textContent ?: "")
+                        // Text with inline markers: a tab carries the width it took.
+                        for (node in child.childNodes.let { l -> (0 until l.length).map { l.item(it) } }) {
+                            if (node.nodeType == org.w3c.dom.Node.TEXT_NODE || node.nodeType == org.w3c.dom.Node.CDATA_SECTION_NODE) {
+                                text.append(node.nodeValue ?: "")
+                                continue
+                            }
+                            when (node.localName) {
+                                "tab" -> { tabWidths[text.length] = (node as DomElement).long("width"); text.append('\t') }
+                                "nbSpace", "fwSpace" -> text.append(' ')
+                                "hyphen" -> text.append('-')
+                                "lineBreak" -> text.append(' ')
+                            }
+                        }
                     }
                     "tbl" -> parseTable(child, header, depth + 1)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                     "pic" -> parsePicture(child)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
@@ -372,14 +385,14 @@ internal object HwpxParser {
             for (offset in start until end) {
                 val obj = inlineAt[offset] ?: continue
                 if (offset > runStart) {
-                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last)?.let { emit(it) }
+                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last, tabWidths)?.let { emit(it) }
                 }
                 val textFirstLine = firstInList && i == 0 && text.substring(start, end).any { it != INLINE_OBJECT_MARKER && it != PAGE_NUMBER_MARK && !it.isWhitespace() }
                 emit(place(obj, seg.long("horzpos"), seg.long("vertpos"), textFirstLine, seg.long("vertsize")))
                 runStart = offset + 1
             }
             if (runStart < end) {
-                textRunFrom(text, runStart, end, runBoundaries, seg, align, last)?.let { emit(it) }
+                textRunFrom(text, runStart, end, runBoundaries, seg, align, last, tabWidths)?.let { emit(it) }
             }
         }
         return out
@@ -388,7 +401,8 @@ internal object HwpxParser {
     /** The line's text split where its character style changes. */
     private fun textRunFrom(
         text: StringBuilder, start: Int, end: Int,
-        runBoundaries: List<Pair<Int, CharStyle>>, seg: DomElement, align: ParaAlign, lastLine: Boolean
+        runBoundaries: List<Pair<Int, CharStyle>>, seg: DomElement, align: ParaAlign, lastLine: Boolean,
+        tabWidths: Map<Int, Long>
     ): HwpxElement.TextRun? {
         if (text.substring(start, end).isBlank()) return null
         val spans = mutableListOf<Span>()
@@ -397,8 +411,12 @@ internal object HwpxParser {
             val idx = runBoundaries.indexOfLast { it.first <= pos }.coerceAtLeast(0)
             val style = runBoundaries.getOrNull(idx)?.second ?: CharStyle()
             val next = (runBoundaries.getOrNull(idx + 1)?.first ?: end).coerceIn(pos + 1, end)
-            val piece = text.substring(pos, next).replace(INLINE_OBJECT_MARKER.toString(), "")
-            if (piece.isNotEmpty()) spans += Span(piece, style)
+            var from = pos
+            for (k in pos..next) {
+                if (k < next && text[k] != INLINE_OBJECT_MARKER) continue
+                if (k > from) spans += spansOf(text.substring(from, k), from, style, tabWidths)
+                from = k + 1
+            }
             pos = next
         }
         val height = seg.long("textheight")

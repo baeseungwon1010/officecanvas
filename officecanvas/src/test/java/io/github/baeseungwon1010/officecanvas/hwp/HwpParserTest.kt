@@ -74,9 +74,16 @@ class HwpParserTest {
     fun `header and page number repeat on every page`() {
         for (i in doc.pages.indices) {
             val r = runs(i)
-            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 머리말 ${i + 1}" && it.yHu < 0 })
+            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 머리말\t${i + 1}" && it.yHu < 0 })
             assertTrue("page number on page ${i + 1}", r.any { it.text == "- ${i + 1} -" && it.align == ParaAlign.CENTER })
         }
+    }
+
+    @Test
+    fun `a tab keeps the width Hangul saved for it`() {
+        val header = runs(0).first { it.text.startsWith("OfficeCanvas") }
+        assertEquals(listOf("OfficeCanvas 머리말", "\t", "1"), header.spans.map { it.text })
+        assertEquals(20000L, header.spans[1].tabHu)
     }
 
     @Test

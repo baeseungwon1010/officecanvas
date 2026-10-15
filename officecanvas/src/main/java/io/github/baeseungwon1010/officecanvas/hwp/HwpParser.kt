@@ -21,6 +21,7 @@ import io.github.baeseungwon1010.officecanvas.hwpx.at
 import io.github.baeseungwon1010.officecanvas.hwpx.extentHu
 import io.github.baeseungwon1010.officecanvas.hwpx.paragraphRelativeY
 import io.github.baeseungwon1010.officecanvas.hwpx.shiftedBy
+import io.github.baeseungwon1010.officecanvas.hwpx.spansOf
 import io.github.baeseungwon1010.officecanvas.hwpx.TableCell
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import io.github.baeseungwon1010.officecanvas.util.Limits
@@ -447,6 +448,7 @@ internal object HwpParser {
             val chars = CharArray(units) { raw!!.u16(2 * it).toChar() }
             val text = StringBuilder(units)
             val inlineAt = HashMap<Int, HwpxElement>()
+            val tabWidths = HashMap<Int, Long>()
             val controls = para.all(CTRL_HEADER).iterator()
             var i = 0
             while (i < units) {
@@ -463,6 +465,8 @@ internal object HwpParser {
                         val obj = ctrl?.let { control(it, depth) }
                         // An automatic number of type 0 (attribute bits 0-3) is the page number.
                         val pageNumber = ctrl?.ctrlId == "atno" && ctrl.body.u32(4) and 0xF == 0
+                        // A tab's data starts with the width it took (u32, HWPUNIT).
+                        if (c == 9 && span >= 3) tabWidths[text.length] = (chars[i + 1].code.toLong() or (chars[i + 2].code.toLong() shl 16))
                         if (obj != null) { inlineAt[text.length] = obj; text.append(OBJECT) }
                         else text.append(if (c == 9) '\t' else if (pageNumber) PAGE_NUMBER_MARK else FILLER)
                         repeat(span - 1) { text.append(FILLER) }
@@ -490,18 +494,19 @@ internal object HwpParser {
                 }
                 for (pos in start until end) {
                     val obj = inlineAt[pos] ?: continue
-                    textRun(text, runStart, pos, runs, line, align, last)?.let { emit(it) }
+                    textRun(text, runStart, pos, runs, line, align, last, tabWidths)?.let { emit(it) }
                     emit(place(obj, line, firstInList && k == 0 && text.substring(start, end).any { it != FILLER && it != OBJECT && !it.isWhitespace() }))
                     runStart = pos + 1
                 }
-                textRun(text, runStart, end, runs, line, align, last)?.let { emit(it) }
+                textRun(text, runStart, end, runs, line, align, last, tabWidths)?.let { emit(it) }
             }
             return out
         }
 
         /** The line's text from [start] to [end], split where the character shape changes. */
         private fun textRun(
-            text: StringBuilder, start: Int, end: Int, runs: List<Pair<Int, Int>>, line: Line, align: ParaAlign, last: Boolean
+            text: StringBuilder, start: Int, end: Int, runs: List<Pair<Int, Int>>, line: Line, align: ParaAlign, last: Boolean,
+            tabWidths: Map<Int, Long>
         ): HwpxElement.TextRun? {
             if (end <= start) return null
             val spans = mutableListOf<Span>()
@@ -509,8 +514,14 @@ internal object HwpParser {
             while (pos < end) {
                 val idx = runs.indexOfLast { it.first <= pos }.coerceAtLeast(0)
                 val next = (runs.getOrNull(idx + 1)?.first ?: end).coerceIn(pos + 1, end)
-                val piece = text.substring(pos, next).filter { it != FILLER && it != OBJECT }.replace("\t", "    ")
-                if (piece.isNotEmpty()) spans += Span(piece, info.charShape(runs.getOrNull(idx)?.second ?: 0))
+                val style = info.charShape(runs.getOrNull(idx)?.second ?: 0)
+                // Fillers and objects take no room; keep tab offsets by dropping them in place.
+                var from = pos
+                for (k in pos..next) {
+                    if (k < next && text[k] != FILLER && text[k] != OBJECT) continue
+                    if (k > from) spans += spansOf(text.substring(from, k), from, style, tabWidths)
+                    from = k + 1
+                }
                 pos = next
             }
             while (spans.isNotEmpty() && spans.last().text.isBlank()) spans.removeAt(spans.size - 1)

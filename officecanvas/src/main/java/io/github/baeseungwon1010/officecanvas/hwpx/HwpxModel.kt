@@ -57,7 +57,28 @@ internal data class CharStyle(
 )
 
 /** A stretch of a line in one character style. */
-internal data class Span(val text: String, val style: CharStyle)
+/** Styled text; a tab is a span of its own ("\t") with the width Hangul gave
+ *  it ([tabHu]), since both formats save each tab's resulting width. */
+internal data class Span(val text: String, val style: CharStyle, val tabHu: Long? = null)
+
+/** [piece] (which starts at [start] in its paragraph) as spans, each tab on its own
+ *  with its saved width from [tabWidths] (by paragraph offset). */
+internal fun spansOf(piece: String, start: Int, style: CharStyle, tabWidths: Map<Int, Long>): List<Span> {
+    if ('\t' !in piece) return listOf(Span(piece, style))
+    val out = mutableListOf<Span>()
+    var from = 0
+    for ((k, c) in piece.withIndex()) {
+        if (c != '\t') continue
+        if (k > from) out += Span(piece.substring(from, k), style)
+        out += Span("\t", style, (tabWidths[start + k] ?: DEFAULT_TAB_HU).coerceIn(0, 100_000))
+        from = k + 1
+    }
+    if (from < piece.length) out += Span(piece.substring(from), style)
+    return out
+}
+
+/** Hangul's default tab stop spacing (40 pt). */
+internal const val DEFAULT_TAB_HU = 4000L
 
 /** A shaded area and border lines; a null side draws no line. */
 internal data class Border(val argb: Int, val widthHu: Long)
