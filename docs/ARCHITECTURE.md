@@ -6,11 +6,13 @@ OfficeCanvas.render(context, file)
         │                         zip with Contents/content.hpf → HWPX
         │                         OLE2 with a "PowerPoint Document" stream → PPT
         │                         OLE2 with an "HWP Document File" header → HWP
+        │                         XML with an <HWPML> root → HWP (laid out here)
         ├── PPTX ── pptx.PptxParser ──┐
         ├── PPT ─── ppt.PptParser ────┼──► slide.Deck ──► slide.SlideRenderer ──► Bitmap per slide
         │                             │                        └── metafile.EmfRenderer / WmfRenderer
         ├── HWPX ── hwpx.HwpxParser ──┐
-        └── HWP ─── hwp.HwpParser ────┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
+        ├── HWP ─── hwp.HwpParser ────┤
+        └── HWPML ─ hwp.HwpmlParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
 ```
 
 Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` is `internal`.
@@ -47,7 +49,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `PageDecor`: headers, footers and the page number for each page (odd and even, changing where their controls appear), and where an object placed relative to its paragraph goes.
 - `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
 
-**`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model.
+**`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model. `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
 
 **`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree).
 
