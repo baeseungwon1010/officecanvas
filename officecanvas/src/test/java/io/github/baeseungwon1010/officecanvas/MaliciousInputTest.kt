@@ -314,6 +314,25 @@ class MaliciousInputTest {
     }
 
     @Test
+    fun `a chart claiming two billion points in a thousand series`() {
+        val ns = """xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart""""
+        val slide = """<p:sld $ns><p:cSld><p:spTree><p:graphicFrame><p:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="6858000"/></p:xfrm><a:graphic><a:graphicData><c:chart r:id="rId1"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"""
+        val values = """<c:val><c:numRef><c:numCache><c:ptCount val="2000000000"/><c:pt idx="1999999999"><c:v>1e308</c:v></c:pt><c:pt idx="3"><c:v>-1e308</c:v></c:pt></c:numCache></c:numRef></c:val>"""
+        val series = """<c:ser><c:dLbls><c:showVal val="1"/><c:numFmt formatCode="#,##0.${"0".repeat(500)}"/></c:dLbls>$values</c:ser>""".repeat(1000)
+        val chart = """<c:chartSpace $ns><c:chart><c:plotArea><c:barChart><c:grouping val="stacked"/>$series</c:barChart><c:valAx><c:majorUnit val="1e-300"/></c:valAx></c:plotArea><c:legend/></c:chart></c:chartSpace>"""
+        val file = zip(
+            "[Content_Types].xml" to "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+            "ppt/presentation.xml" to """<p:presentation $ns><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/></p:presentation>""",
+            "ppt/_rels/presentation.xml.rels" to """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="slide" Target="slides/slide1.xml"/></Relationships>""",
+            "ppt/slides/slide1.xml" to slide,
+            "ppt/slides/_rels/slide1.xml.rels" to """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="chart" Target="../charts/chart1.xml"/></Relationships>""",
+            "ppt/charts/chart1.xml" to chart
+        )
+        // Capped at 64 series; drawing their few hundred labels is what takes the time.
+        survives(60) { render(file, longSide = 400) }
+    }
+
+    @Test
     fun `parts with a DOCTYPE are refused`() {
         val secret = File.createTempFile("secret", ".txt").apply { writeText("TOPSECRET"); deleteOnExit() }
         val xxe = "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file://${secret.absolutePath}\">]><r>&x;</r>"

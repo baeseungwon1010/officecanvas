@@ -339,6 +339,12 @@ internal object PptxParser {
 
         data.child(NS_A, "tbl")?.let { return listOfNotNull(table(it, box, ctx)) }
         data.child(NS_DGM, "relIds")?.let { return smartArt(it, box, part, ctx) }
+        // A chart part caches the values it shows; it is drawn as shapes.
+        data.child(NS_C, "chart")?.let { ref ->
+            val chartPath = ctx.rels(part)[ref.getAttributeNS(NS_R, "id")] ?: return emptyList()
+            val doc = ctx.cache.xml(chartPath) ?: return emptyList()
+            return ChartParser.parse(doc, box, ctx.theme)
+        }
         // An embedded OLE object (an Excel sheet, an equation) carries a preview picture.
         data.descendants(NS_P, "pic").firstOrNull()?.let { pic -> return listOfNotNull(picture(pic, part, ctx, frame = box)) }
         return emptyList()
