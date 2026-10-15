@@ -3,13 +3,24 @@ package io.github.baeseungwon1010.officecanvas.hwp
 import io.github.baeseungwon1010.officecanvas.hwpx.Border
 import io.github.baeseungwon1010.officecanvas.hwpx.BorderFill
 import io.github.baeseungwon1010.officecanvas.hwpx.CharStyle
+import io.github.baeseungwon1010.officecanvas.hwpx.DecorArea
+import io.github.baeseungwon1010.officecanvas.hwpx.DecorTimeline
+import io.github.baeseungwon1010.officecanvas.hwpx.DrawingKind
 import io.github.baeseungwon1010.officecanvas.hwpx.HWPUNIT_PER_INCH
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxDoc
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxElement
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxPage
+import io.github.baeseungwon1010.officecanvas.hwpx.ImageCrop
+import io.github.baeseungwon1010.officecanvas.hwpx.PAGE_NUMBER_MARK
+import io.github.baeseungwon1010.officecanvas.hwpx.PageDecor
 import io.github.baeseungwon1010.officecanvas.hwpx.PageFlow
+import io.github.baeseungwon1010.officecanvas.hwpx.withPageNumber
 import io.github.baeseungwon1010.officecanvas.hwpx.ParaAlign
 import io.github.baeseungwon1010.officecanvas.hwpx.Span
+import io.github.baeseungwon1010.officecanvas.hwpx.at
+import io.github.baeseungwon1010.officecanvas.hwpx.extentHu
+import io.github.baeseungwon1010.officecanvas.hwpx.paragraphRelativeY
+import io.github.baeseungwon1010.officecanvas.hwpx.shiftedBy
 import io.github.baeseungwon1010.officecanvas.hwpx.TableCell
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import io.github.baeseungwon1010.officecanvas.util.Limits
@@ -55,7 +66,24 @@ internal object HwpParser {
     private const val PAGE_DEF = TAG_BEGIN + 57
     private const val SHAPE_COMPONENT = TAG_BEGIN + 60
     private const val TABLE = TAG_BEGIN + 61
+    private const val SHAPE_LINE = TAG_BEGIN + 62
+    private const val SHAPE_RECTANGLE = TAG_BEGIN + 63
+    private const val SHAPE_POLYGON = TAG_BEGIN + 66
     private const val SHAPE_PICTURE = TAG_BEGIN + 69
+
+    /** 2x3 affine matrices [a, b, c, d, e, f]: x' = a x + b y + c, y' = d x + e y + f. */
+    private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+    private fun multiply(m: DoubleArray, n: DoubleArray) = doubleArrayOf(
+        m[0] * n[0] + m[1] * n[3], m[0] * n[1] + m[1] * n[4], m[0] * n[2] + m[1] * n[5] + m[2],
+        m[3] * n[0] + m[4] * n[3], m[3] * n[1] + m[4] * n[4], m[3] * n[2] + m[4] * n[5] + m[5]
+    )
+
+    /** Six doubles; anything absurd counts as no transform. */
+    private fun matrix(b: Bytes, at: Int): DoubleArray =
+        DoubleArray(6) { b.f64(at + 8 * it) }.takeIf { m -> m.all { it.isFinite() && kotlin.math.abs(it) < 1e7 } } ?: IDENTITY
+
+    private fun apply(m: DoubleArray, x: Double, y: Double) = (m[0] * x + m[1] * y + m[2]) to (m[3] * x + m[4] * y + m[5])
 
     /** A stream larger than this once inflated is not read. */
     private const val MAX_STREAM_BYTES = 64 shl 20
@@ -161,6 +189,7 @@ internal object HwpParser {
         fun u16(o: Int): Int = u8(o) or (u8(o + 1) shl 8)
         fun i16(o: Int): Int = u16(o).toShort().toInt()
         fun u32(o: Int): Int = u16(o) or (u16(o + 2) shl 16)
+        fun f64(o: Int): Double = java.lang.Double.longBitsToDouble((u32(o).toLong() and 0xFFFFFFFFL) or (u32(o + 4).toLong() shl 32))
         fun utf16(o: Int, chars: Int): String {
             val n = chars.coerceIn(0, ((size - o) / 2).coerceAtLeast(0))
             return String(CharArray(n) { u16(o + 2 * it).toChar() })
@@ -316,11 +345,7 @@ internal object HwpParser {
         val rightHu: Long = 8504, val bottomHu: Long = 4252, val headerHu: Long = 4252, val footerHu: Long = 4252
     )
 
-    private fun HwpxElement.shifted(dx: Long, dy: Long): HwpxElement = when (this) {
-        is HwpxElement.TextRun -> copy(xHu = xHu + dx, yHu = yHu + dy)
-        is HwpxElement.Table -> copy(xHu = xHu + dx, yHu = yHu + dy)
-        is HwpxElement.ImageEl -> copy(xHu = xHu + dx, yHu = yHu + dy)
-    }
+    private fun HwpxElement.shifted(dx: Long, dy: Long): HwpxElement = shiftedBy(dx, dy)
 
     private class Line(val start: Int, val y: Long, val height: Long, val textHeight: Long, val baseline: Long, val spacing: Long, val x: Long, val width: Long)
 
@@ -348,35 +373,34 @@ internal object HwpParser {
     private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, val firstPageIndex: Int) {
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
         val pages = mutableListOf<HwpxPage>()
-        private var header: List<HwpxElement> = emptyList()
-        private var footer: List<HwpxElement> = emptyList()
-        /** Page number position (1-3 top, 4-6 bottom: left, center, right), if any. */
-        private var pageNumber: Int? = null
 
         private fun listParagraphs(ctrl: Record): List<HwpxElement> =
-            ctrl.children.filter { it.tag == PARA_HEADER }.flatMap { paragraph(it, 1) }
+            ctrl.children.filter { it.tag == PARA_HEADER }.withIndex().flatMap { (k, p) -> paragraph(p, 1, inCell = true, firstInList = k == 0) }
 
-        private fun pageNumberRun(position: Int, number: Int): HwpxElement.TextRun? {
-            if (position !in 1..6) return null
-            val g = geometry
-            val width = g.widthHu - g.bodyXHu - g.rightHu
-            val y = if (position <= 3) -g.headerHu / 2 - 500 else g.heightHu - g.bottomHu - g.footerHu / 2 - 500 - g.bodyYHu
-            val align = when ((position - 1) % 3) { 0 -> ParaAlign.LEFT; 1 -> ParaAlign.CENTER; else -> ParaAlign.RIGHT }
-            return HwpxElement.TextRun(0, y, width, 1000, listOf(Span(number.toString(), CharStyle())), 850, align)
-        }
+        /** A header's or footer's paragraphs and their vertical alignment (LIST_HEADER flags bits 5-6). */
+        private fun area(ctrl: Record) =
+            DecorArea(listParagraphs(ctrl), ctrl.child(LIST_HEADER)?.body?.let { (it.u32(4) ushr 5) and 0x3 } ?: 0)
 
         fun read(roots: List<Record>, fallback: PageGeometry) {
             geometry = fallback
             var flow: PageFlow? = null
+            val decor = DecorTimeline()
             for (para in roots.filter { it.tag == PARA_HEADER }) {
+                val changes = mutableListOf<(PageDecor) -> PageDecor>()
                 // The section definition rides on the first paragraph's controls.
                 for (ctrl in para.all(CTRL_HEADER)) when (ctrl.ctrlId) {
                     "secd" -> ctrl.child(PAGE_DEF)?.let { geometry = pageGeometry(it.body) }
                     // Header and footer: a list of paragraphs placed in the header
-                    // (footer) area, repeated on every page of the section.
-                    "head" -> if (header.isEmpty()) header = listParagraphs(ctrl)
-                    "foot" -> if (footer.isEmpty()) footer = listParagraphs(ctrl)
-                    "pgnp" -> pageNumber = (ctrl.body.u32(4) ushr 8) and 0xF
+                    // (footer) area; attribute bits 0-1 say which pages (both, even, odd).
+                    "head" -> area(ctrl).let { a -> changes += { it.withHeader(a, ctrl.body.u32(4) and 0x3) } }
+                    "foot" -> area(ctrl).let { a -> changes += { it.withFooter(a, ctrl.body.u32(4) and 0x3) } }
+                    // Page number position: attributes (bits 8-11: position), then the
+                    // user, prefix, suffix and side characters.
+                    "pgnp" -> {
+                        val pos = (ctrl.body.u32(4) ushr 8) and 0xF
+                        val side = ctrl.body.u16(14).takeIf { it in 33..0xFFFF }?.toChar()?.toString().orEmpty()
+                        changes += { it.copy(pageNumberPosition = pos, pageNumberSide = side) }
+                    }
                 }
                 val pageFlow = flow ?: PageFlow(geometry.run { heightHu - bodyYHu - bottomHu - footerHu }).also { flow = it }
                 if (pageFlow.full) break
@@ -387,14 +411,14 @@ internal object HwpParser {
                 for ((k, el) in paragraph(para, 0).withIndex()) {
                     pageFlow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in lineStarts, floating = el in placedFloating)
                 }
+                // These controls apply from the page their paragraph starts on.
+                changes.forEach { decor.change(pageFlow.page, it) }
             }
             val g = geometry
-            for (elements in flow?.finish().orEmpty()) {
-                if (elements.isEmpty()) continue
-                val decorations = header.map { it.shifted(0, -g.headerHu) } +
-                    footer.map { it.shifted(0, g.heightHu - g.bottomHu - g.footerHu - g.bodyYHu) } +
-                    listOfNotNull(pageNumber?.let { pageNumberRun(it, firstPageIndex + pages.size + 1) })
-                pages += HwpxPage(g.widthHu, g.heightHu, decorations + elements, g.bodyXHu, g.bodyYHu)
+            val pg = PageDecor.Geometry(g.widthHu, g.heightHu, g.bodyXHu, g.bodyYHu, g.rightHu, g.bottomHu, g.headerHu, g.footerHu)
+            for ((index, elements) in flow?.finish().orEmpty()) {
+                val number = firstPageIndex + pages.size + 1
+                pages += HwpxPage(g.widthHu, g.heightHu, decor.at(index).elements(number, pg) + elements.map { it.withPageNumber(number) }, g.bodyXHu, g.bodyYHu)
             }
         }
 
@@ -416,7 +440,8 @@ internal object HwpParser {
          * (tables, pictures, section definitions, ...) take their CTRL_HEADER
          * children in order.
          */
-        fun paragraph(para: Record, depth: Int, inCell: Boolean = false): List<HwpxElement> {
+        /** [firstInList]: [para] starts a header, footer or text box (its top is the list's top). */
+        fun paragraph(para: Record, depth: Int, inCell: Boolean = false, firstInList: Boolean = false): List<HwpxElement> {
             val raw = para.child(PARA_TEXT)?.body
             val units = (raw?.size ?: 0) / 2
             val chars = CharArray(units) { raw!!.u16(2 * it).toChar() }
@@ -436,8 +461,10 @@ internal object HwpParser {
                         val span = minOf(8, units - i)
                         val ctrl = if (c in EXTENDED_CONTROLS) controls.takeIf { it.hasNext() }?.next() else null
                         val obj = ctrl?.let { control(it, depth) }
+                        // An automatic number of type 0 (attribute bits 0-3) is the page number.
+                        val pageNumber = ctrl?.ctrlId == "atno" && ctrl.body.u32(4) and 0xF == 0
                         if (obj != null) { inlineAt[text.length] = obj; text.append(OBJECT) }
-                        else text.append(if (c == 9) '\t' else FILLER)
+                        else text.append(if (c == 9) '\t' else if (pageNumber) PAGE_NUMBER_MARK else FILLER)
                         repeat(span - 1) { text.append(FILLER) }
                         i += span
                     }
@@ -464,7 +491,7 @@ internal object HwpParser {
                 for (pos in start until end) {
                     val obj = inlineAt[pos] ?: continue
                     textRun(text, runStart, pos, runs, line, align, last)?.let { emit(it) }
-                    emit(place(obj, line))
+                    emit(place(obj, line, firstInList && k == 0 && text.substring(start, end).any { it != FILLER && it != OBJECT && !it.isWhitespace() }))
                     runStart = pos + 1
                 }
                 textRun(text, runStart, end, runs, line, align, last)?.let { emit(it) }
@@ -496,7 +523,8 @@ internal object HwpParser {
         }
 
         /** Inline objects sit on their line; floating ones are offset from it (or from the page). */
-        private fun place(obj: HwpxElement, line: Line): HwpxElement {
+        /** [textFirstLine]: [line] is its paragraph's first and holds text. */
+        private fun place(obj: HwpxElement, line: Line, textFirstLine: Boolean): HwpxElement {
             val floating = floatingOf[obj]
             var x = line.x
             var y = line.y
@@ -509,23 +537,19 @@ internal object HwpParser {
                 y = when (floating.vertRel) {
                     0 -> floating.vertOffset - geometry.bodyYHu
                     1 -> floating.vertOffset
-                    // An object that takes its own lines and moves with the text
-                    // can't sit above the paragraph it belongs to; a negative offset
-                    // saved for it is left from before the text moved (the next
-                    // paragraph starts right below the object at the anchor line).
-                    else -> if (floating.keepsBelowAnchor) maxOf(line.y, line.y + floating.vertOffset) else line.y + floating.vertOffset
+                    else -> paragraphRelativeY(floating.vertOffset, floating.takesLines, floating.keepsBelowAnchor,
+                        obj.extentHu, line.y, textFirstLine, line.height)
                 }
             }
-            val placed = when (obj) {
-                is HwpxElement.Table -> obj.copy(xHu = x, yHu = y)
-                is HwpxElement.ImageEl -> obj.copy(xHu = x, yHu = y)
-                is HwpxElement.TextRun -> obj.copy(xHu = x, yHu = y)
-            }
+            val placed = obj.at(x, y)
             if (floating != null) placedFloating += placed
             return placed
         }
 
-        private class Floating(val vertRel: Int, val horzRel: Int, val vertOffset: Long, val horzOffset: Long, val keepsBelowAnchor: Boolean)
+        private class Floating(
+            val vertRel: Int, val horzRel: Int, val vertOffset: Long, val horzOffset: Long,
+            val takesLines: Boolean, val keepsBelowAnchor: Boolean
+        )
         private val floatingOf = java.util.IdentityHashMap<HwpxElement, Floating>()
         /** Elements that begin a line (see PageFlow.add). */
         private val lineStarts = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>())
@@ -537,7 +561,7 @@ internal object HwpParser {
             if (depth > Limits.MAX_NESTING) return null
             val obj = when (ctrl.ctrlId) {
                 "tbl " -> table(ctrl, depth)
-                "gso " -> picture(ctrl)
+                "gso " -> drawingObject(ctrl, depth)
                 else -> null
             } ?: return null
             // Common object properties: attribute bit 0 = treat as a character.
@@ -545,18 +569,118 @@ internal object HwpParser {
             if (attr and 0x1 == 0) {
                 // Bits 3-4 vertical reference (paper, page, paragraph), 8-9 horizontal,
                 // 13 moves with text, 21-23 text wrapping (1 = takes its own lines).
-                val keepsBelow = (attr ushr 13) and 0x1 != 0 && (attr ushr 21) and 0x7 == 1
-                floatingOf[obj] = Floating((attr ushr 3) and 0x3, (attr ushr 8) and 0x3, ctrl.body.u32(8).toLong(), ctrl.body.u32(12).toLong(), keepsBelow)
+                val takesLines = (attr ushr 21) and 0x7 == 1
+                val keepsBelow = takesLines && (attr ushr 13) and 0x1 != 0
+                floatingOf[obj] = Floating((attr ushr 3) and 0x3, (attr ushr 8) and 0x3, ctrl.body.u32(8).toLong(), ctrl.body.u32(12).toLong(),
+                    takesLines, keepsBelow)
             }
             return obj
         }
+
+        /**
+         * A drawing object (gso): a picture, or a line, rectangle, ellipse, polygon
+         * or group of them, possibly holding a text box.
+         */
+        private fun drawingObject(ctrl: Record, depth: Int): HwpxElement? {
+            val sc = ctrl.child(SHAPE_COMPONENT) ?: return null
+            if (sc.ctrlId == "\$pic") return picture(ctrl)
+            // A straight line has no height (or width).
+            val w = ctrl.body.u32(16).toLong(); val h = ctrl.body.u32(20).toLong()
+            if (w < 0 || h < 0 || w + h == 0L) return null
+            val members = shapes(sc, IDENTITY, depth)
+            if (members.isEmpty()) return null
+            return if (members.size == 1 && members[0].xHu == 0L && members[0].yHu == 0L) members[0]
+            else HwpxElement.Drawing(0, 0, w, h, DrawingKind.RECTANGLE, lineArgb = null, content = members)
+        }
+
+        /**
+         * One shape component and, for a group, its members, in the coordinates of
+         * the object's box. Each component maps its own original-size coordinates
+         * into its parent's through its rendering matrices (a translation, then a
+         * scale and a rotation per group level).
+         */
+        private fun shapes(sc: Record, parent: DoubleArray, depth: Int): List<HwpxElement> {
+            if (depth > Limits.MAX_NESTING) return emptyList()
+            val b = sc.body
+            val id = sc.ctrlId
+            // A top-level component repeats its control id.
+            val o = if (b.u32(4) == b.u32(0)) 8 else 4
+            val origW = b.u32(o + 12).toLong().coerceAtLeast(1)
+            val origH = b.u32(o + 16).toLong().coerceAtLeast(1)
+            var at = o + 42
+            val levels = b.u16(at).coerceAtMost(16)
+            var m = matrix(b, at + 2)
+            at += 2 + 48
+            repeat(levels) { m = multiply(multiply(m, matrix(b, at)), matrix(b, at + 48)); at += 96 }
+            val total = multiply(parent, m)
+            if (id == "\$con") {
+                return sc.children.filter { it.tag == SHAPE_COMPONENT }.flatMap { shapes(it, total, depth + 1) }
+            }
+            // Line: color, width, attributes (bits 0-5 type, 0 = none), outline style.
+            val lineType = b.u32(at + 8) and 0x3F
+            val lineArgb = if (lineType == 0) null else colorRefOf(b.u32(at))
+            val lineWidth = b.u32(at + 4).toLong().coerceIn(0, 10_000)
+            val fillType = b.u32(at + 13)
+            val fill = if (fillType and 0x1 != 0) colorRefOf(b.u32(at + 17)) else null
+
+            fun mapped(points: List<Pair<Double, Double>>) = points.map { (x, y) -> apply(total, x, y) }
+            val corners = listOf(0.0 to 0.0, origW.toDouble() to 0.0, origW.toDouble() to origH.toDouble(), 0.0 to origH.toDouble())
+            val (kind, points, corner) = when (id) {
+                "\$rec" -> Triple(DrawingKind.RECTANGLE, mapped(corners), sc.child(SHAPE_RECTANGLE)?.body?.u8(0) ?: 0)
+                "\$ell" -> Triple(DrawingKind.ELLIPSE, mapped(corners), 0)
+                "\$lin" -> {
+                    val l = sc.child(SHAPE_LINE)?.body ?: return emptyList()
+                    Triple(DrawingKind.LINE, mapped(listOf(l.u32(0).toDouble() to l.u32(4).toDouble(), l.u32(8).toDouble() to l.u32(12).toDouble())), 0)
+                }
+                "\$pol" -> {
+                    val p = sc.child(SHAPE_POLYGON)?.body ?: return emptyList()
+                    val n = p.u32(0).coerceIn(0, (p.size - 4) / 8)
+                    Triple(DrawingKind.POLYGON, mapped((0 until n).map { p.u32(4 + 8 * it).toDouble() to p.u32(8 + 8 * it).toDouble() }), 0)
+                }
+                else -> return emptyList()
+            }
+            if (points.isEmpty()) return emptyList()
+            val minX = points.minOf { it.first }; val minY = points.minOf { it.second }
+            val boxW = (points.maxOf { it.first } - minX).toLong().coerceAtLeast(1)
+            val boxH = (points.maxOf { it.second } - minY).toLong().coerceAtLeast(1)
+            // A text box: a list header (paragraph count, flags with the vertical
+            // alignment in bits 5-6, then left/right/top/bottom margins) and its paragraphs.
+            val list = sc.child(LIST_HEADER)
+            val content = if (list == null) emptyList() else {
+                val lb = list.body
+                sc.children.filter { it.tag == PARA_HEADER }.withIndex().flatMap { (k, p) -> paragraph(p, depth + 1, inCell = true, firstInList = k == 0) }
+                    .map { it.shifted(lb.u16(8).toLong(), lb.u16(12).toLong()) }
+            }
+            val rel = points.map { (x, y) -> (x - minX).toLong() to (y - minY).toLong() }
+            // An axis-aligned rectangle stays a rectangle; a rotated one becomes its outline.
+            val axisAligned = kind != DrawingKind.RECTANGLE || rel.all { (x, y) -> (x == 0L || x == boxW) && (y == 0L || y == boxH) }
+            return listOf(HwpxElement.Drawing(
+                minX.toLong(), minY.toLong(), boxW, boxH,
+                if (axisAligned) kind else DrawingKind.POLYGON, rel, corner,
+                lineArgb, lineWidth, fill, content,
+                list?.body?.let { (it.u32(4) ushr 5) and 0x3 } ?: 0
+            ))
+        }
+
+        private fun colorRefOf(v: Int): Int? = if (v ushr 24 != 0) null
+            else (0xFF shl 24) or ((v and 0xFF) shl 16) or (v and 0xFF00) or ((v ushr 16) and 0xFF)
 
         private fun picture(ctrl: Record): HwpxElement.ImageEl? {
             val pic = findDeep(ctrl, SHAPE_PICTURE, 0) ?: return null
             val bytes = picture(pic.body.u16(71)) ?: return null
             val w = ctrl.body.u32(16).toLong(); val h = ctrl.body.u32(20).toLong()
             if (w <= 0 || h <= 0) return null
-            return HwpxElement.ImageEl(0, 0, w, h, zipEntry = null, bytes = bytes)
+            // The visible part (left/top/right/bottom, bytes 44-59) is given within the
+            // image's own size, which newer files save near the end of the record (its
+            // last 9 bytes: width, height, a flag); older ones in the same units as the
+            // corner points (bytes 12-43).
+            val b = pic.body
+            val dimW = if (b.size >= 91) b.u32(b.size - 9) else 0
+            val dimH = if (b.size >= 91) b.u32(b.size - 5) else 0
+            val (fullW, fullH) = if (dimW > 0 && dimH > 0) dimW to dimH else (b.u32(20) - b.u32(12)) to (b.u32(32) - b.u32(16))
+            val crop = ImageCrop.of(b.u32(44).toDouble(), b.u32(48).toDouble(), b.u32(52).toDouble(), b.u32(56).toDouble(),
+                fullW.toDouble(), fullH.toDouble())
+            return HwpxElement.ImageEl(0, 0, w, h, zipEntry = null, bytes = bytes, crop = crop)
         }
 
         private fun findDeep(r: Record, tag: Int, depth: Int): Record? {
@@ -622,11 +746,15 @@ internal object HwpParser {
                     borderFill = info.borderFill(cell.borderFill), vAlign = cell.vAlign)
             }
             val width = ctrl.body.u32(16).toLong()
-            val height = ctrl.body.u32(20).toLong()
+            val declared = ctrl.body.u32(20).toLong()
+            // A table running over several pages declares only part of its height;
+            // its rows say how tall it really is.
+            val known = rowHeights.values.takeIf { it.isNotEmpty() }?.average()?.toLong() ?: (declared / rowCnt)
+            val rowsHu = (0 until rowCnt).map { rowHeights[it] ?: known }
             return HwpxElement.Table(
-                xHu = 0, yHu = 0, widthHu = width, heightHu = height,
+                xHu = 0, yHu = 0, widthHu = width, heightHu = maxOf(declared, rowsHu.sum()),
                 columnWidthsHu = (0 until colCnt).map { colWidths[it] ?: (width / colCnt) },
-                rowHeightsHu = (0 until rowCnt).map { rowHeights[it] ?: (height / rowCnt) },
+                rowHeightsHu = rowsHu,
                 cells = grid
             )
         }

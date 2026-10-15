@@ -1,9 +1,10 @@
 """Builds sample.hwp: a Hangul 5.0 binary document with the same three pages as
 sample.hwpx (headings, body text, a table), plus what the .hwp tests check
 exactly: a centered bold red title, a table cell with a fill and middle vertical
-alignment, an embedded PNG, a header line, a page number at the bottom center,
-and a paragraph marked as starting a page while its line sits at the top like
-the one before it.
+alignment, an embedded PNG cropped to its right half, a header line ending in
+the page number field, a page number at the bottom center ("- 2 -"), a floating
+rectangle text box, an inline line, and a paragraph marked as starting a page
+while its line sits at the top like the one before it.
 
 Every line carries its saved position (PARA_LINE_SEG), computed here with fixed
 metrics the way make_sample_hwpx.py does. The OLE2 container is written by a
@@ -212,10 +213,11 @@ def ctrl_chars(*codes):
     return b"".join(struct.pack("<H", c) * 1 + b"\0" * 12 + struct.pack("<H", c) for c in codes)
 
 
-def paragraph(level, flow, text, shape=0, para_shape=0, controls=b"", ctrl_text=b"", page_break=False, lines_at=None, width=BODY_W):
+def paragraph(level, flow, text, shape=0, para_shape=0, controls=b"", ctrl_text=b"", page_break=False, lines_at=None,
+              width=BODY_W, ctrl_after=b""):
     """controls: CTRL_HEADER records (already at level+1); ctrl_text: their
-    8-unit placeholders, which come first in the text."""
-    body = ctrl_text + text.encode("utf-16le") + struct.pack("<H", 13)
+    8-unit placeholders, which come first in the text (ctrl_after: after it)."""
+    body = ctrl_text + text.encode("utf-16le") + ctrl_after + struct.pack("<H", 13)
     units = len(body) // 2
     pieces = [text[i:i + CHARS] for i in range(0, len(text), CHARS)] or [""]
     segs = b""
@@ -238,9 +240,12 @@ section = b""
 page_def = struct.pack("<9II", PAGE_W, PAGE_H, LEFT, RIGHT, TOP, BOTTOM, HEAD, FOOT, 0, 0)
 secd = rec(71, 1, struct.pack("<I", 0x73656364) + b"\0" * 32) + rec(73, 2, page_def)
 head_list = rec(72, 2, struct.pack("<HHI", 1, 0, 0) + b"\0" * 26)
-head_para = paragraph(2, None, "OfficeCanvas 머리말", 3, 0, lines_at=[0])
+# The header line ends in an auto number field of type 0 (the page number).
+atno = rec(71, 3, struct.pack("<I", 0x61746E6F) + struct.pack("<I", 0) + b"\0" * 8)
+head_para = paragraph(2, None, "OfficeCanvas 머리말 ", 3, 0, lines_at=[0], ctrl_after=ctrl_chars(18), controls=atno)
 head = rec(71, 1, struct.pack("<I", 0x68656164) + struct.pack("<I", 0)) + head_list + head_para
-pgnp = rec(71, 1, struct.pack("<I", 0x70676E70) + struct.pack("<I", 5 << 8) + b"\0" * 8)
+# Bottom center (5), with "-" as the side character: "- 2 -".
+pgnp = rec(71, 1, struct.pack("<I", 0x70676E70) + struct.pack("<I", 5 << 8) + struct.pack("<HHHH", 0, 0, 0, ord("-")))
 section += paragraph(0, flow, "1. 문서 구조와 줄 위치", 2, 1,
                      controls=secd + head + pgnp, ctrl_text=ctrl_chars(2, 16, 21))
 
@@ -277,15 +282,59 @@ pic_w, pic_h = 14400, 7200
 pic_y = flow.place(pic_h + 600)
 gso_common = struct.pack("<I", 0x67736F20) + struct.pack("<IiiII", 0x1, 0, 0, pic_w, pic_h) + b"\0" * 22
 shape = struct.pack("<II", 0x24706963, 0x24706963) + b"\0" * 188
-picture = b"\0" * 71 + struct.pack("<H", 1) + b"\0"
+# Border (12 bytes), the image's corners (4 points), the visible part (left,
+# top, right, bottom) within the image's own size, margins and picture info
+# (BinData id at 71), border alpha, instance id, effects, and last the image's
+# own size (80 x 40 here) and a flag. The visible part is the right half.
+corners = struct.pack("<8i", 0, 0, 8000, 0, 8000, 4000, 0, 4000)
+picture = (b"\0" * 12 + corners + struct.pack("<4i", 40, 0, 80, 40) + b"\0" * 11 + struct.pack("<H", 1)
+           + b"\0" + struct.pack("<II", 0, 0) + struct.pack("<ii", 80, 40) + b"\0")
 section += rec(66, 0, struct.pack("<IIHBBHHHIH", 9, 0, 0, 0, 0, 1, 0, 1, 0, 0))
 section += rec(67, 1, ctrl_chars(11) + struct.pack("<H", 13))
 section += rec(68, 1, struct.pack("<II", 0, 0))
 section += rec(69, 1, struct.pack("<IiiiiiiiI", 0, pic_y, pic_h, pic_h, pic_h, 600, 0, BODY_W, 0x60000))
 section += rec(71, 1, gso_common) + rec(76, 2, shape) + rec(85, 3, picture)
 
-for i in range(10):
-    section += paragraph(0, flow, f"({i + 9}) " + BODY, 0, 2)
+
+def gso_header(attr, vert_offset, horz_offset, w, h):
+    return rec(71, 1, struct.pack("<I", 0x67736F20) + struct.pack("<IiiII", attr, vert_offset, horz_offset, w, h) + b"\0" * 22)
+
+
+def shape_component(kind, w, h, line_color, line_width, fill=None):
+    """A top-level shape component: its id twice, offsets, group level and version,
+    original and current size, flags, rotation; identity rendering matrices (a
+    translation and one scale/rotation pair); line info; and the fill."""
+    ident = struct.pack("<6d", 1, 0, 0, 0, 1, 0)
+    p = struct.pack("<II", kind, kind) + struct.pack("<iiHH", 0, 0, 0, 0) + struct.pack("<IIIII", w, h, w, h, 0)
+    p += struct.pack("<Hii", 0, w // 2, h // 2) + struct.pack("<H", 1) + ident * 3
+    p += colorref(line_color) + struct.pack("<iI", line_width, 1) + bytes([0])
+    p += struct.pack("<I", 1) + colorref(fill) + colorref(0) + struct.pack("<i", -1) if fill is not None else struct.pack("<I", 0)
+    return rec(76, 2, p + b"\0" * 5)
+
+
+# A floating rectangle text box: moves with the paragraph (bit 13), placed by
+# offsets from it (vertical and horizontal reference 2), in front of the text (3).
+box_w, box_h = 14000, 4000
+float_attr = (2 << 3) | (2 << 8) | (1 << 13) | (3 << 21)
+box = gso_header(float_attr, 1500, BODY_W - box_w, box_w, box_h)
+box += shape_component(0x24726563, box_w, box_h, 0x1F3864, 71, 0xDDEBF7)
+box += rec(72, 3, struct.pack("<HHI", 1, 0, 1 << 5) + struct.pack("<HHHH", 283, 283, 283, 283) + struct.pack("<I", box_w))
+box += paragraph(3, None, "글상자 안의 글", 0, 0, lines_at=[0], width=box_w - 566)
+box += rec(79, 3, bytes([20]) + struct.pack("<8i", 0, 0, box_w, 0, box_w, box_h, 0, box_h))
+section += paragraph(0, flow, "(9) " + BODY, 0, 2, controls=box, ctrl_text=ctrl_chars(11))
+
+# A horizontal line, treated as a character, on its own line.
+line_y = flow.place(600 + 600)
+line = gso_header(0x1, 0, 0, BODY_W, 0) + shape_component(0x246C696E, BODY_W, 0, 0xC00000, 57)
+line += rec(78, 3, struct.pack("<4iH", 0, 0, BODY_W, 0, 0))
+section += rec(66, 0, struct.pack("<IIHBBHHHIH", 9, 0, 0, 0, 0, 1, 0, 1, 0, 0))
+section += rec(67, 1, ctrl_chars(11) + struct.pack("<H", 13))
+section += rec(68, 1, struct.pack("<II", 0, 0))
+section += rec(69, 1, struct.pack("<IiiiiiiiI", 0, line_y, 600, 600, 600, 600, 0, BODY_W, 0x60000))
+section += line
+
+for i in range(9):
+    section += paragraph(0, flow, f"({i + 10}) " + BODY, 0, 2)
 
 # A page break whose first line sits at the top just like the previous page's.
 flow.y = 0
@@ -293,7 +342,8 @@ flow.pages += 1
 section += paragraph(0, flow, "3. 맺음말", 1, page_break=True)
 section += paragraph(0, flow, "이 샘플은 실제 문서를 대신해 테스트에 쓰입니다.", 3)
 
-img = Image.new("RGB", (80, 40), (0x3A, 0x5B, 0xA0))
+img = Image.new("RGB", (80, 40), (0xDC, 0x28, 0x28))
+img.paste((0x3A, 0x5B, 0xA0), (40, 0, 80, 40))
 buf = io.BytesIO()
 img.save(buf, "PNG")
 

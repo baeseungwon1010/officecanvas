@@ -9,16 +9,14 @@ import io.github.baeseungwon1010.officecanvas.util.Limits
  * A new page starts where a line's saved vertical position goes back up, or where
  * a paragraph is marked as starting a page. A table that runs past the bottom of
  * the body area is split between rows, as Hangul does: the rows that fit stay,
- * and the rest open the next page at its top, where Hangul placed the following
- * text below them.
+ * the rest continue at the top of the following pages, and the text after the
+ * table goes on the page where it ends (its saved positions continue from there).
  */
 internal class PageFlow(private val bodyHeightHu: Long) {
 
     val pages = mutableListOf<MutableList<HwpxElement>>(mutableListOf())
     /** Top of the last line placed on the current page. */
     private var lastY = -1L
-    /** What moves to the top of the next page: the rest of a split table. */
-    private val carry = mutableListOf<HwpxElement>()
 
     /**
      * Floating objects that run past the bottom of their page, with the page they
@@ -52,41 +50,45 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         place(el)
     }
 
-    /** Pages left over from a split table at the end of the section. */
-    fun finish(): List<List<HwpxElement>> {
+    /** The page being filled (0-based, counting pages that may end up empty). */
+    val page: Int get() = pages.size - 1
+
+    /** The non-empty pages, with their indices as [page] counted them. */
+    fun finish(): List<IndexedValue<List<HwpxElement>>> {
         settlePending(0)
-        while (carry.isNotEmpty() && !full) newPage()
-        return pages.filter { it.isNotEmpty() }
+        return pages.withIndex().filter { it.value.isNotEmpty() }
     }
 
     private fun newPage() {
         if (full) return
         pages += mutableListOf<HwpxElement>()
         lastY = -1L
-        val moving = carry.toList()
-        carry.clear()
-        moving.forEach { place(it) }
     }
 
     private fun place(el: HwpxElement) {
-        if (el !is HwpxElement.Table || bodyHeightHu <= 0 || el.yHu + el.heightHu <= bodyHeightHu * 102 / 100) {
-            pages.last() += el
-            return
+        var rest = el
+        var guard = 0
+        while (true) {
+            if (rest !is HwpxElement.Table || bodyHeightHu <= 0 || rest.yHu + rest.heightHu <= bodyHeightHu * 102 / 100) {
+                pages.last() += rest
+                return
+            }
+            val heights = scaledRowHeights(rest)
+            val room = bodyHeightHu - rest.yHu
+            var fit = 0
+            var used = 0L
+            while (fit < heights.size && used + heights[fit] <= room) { used += heights[fit]; fit++ }
+            // A table starting at the top of a page keeps at least one row there.
+            if (fit == 0 && rest.yHu <= 0) { fit = 1; used = heights[0] }
+            if (fit >= heights.size) { pages.last() += rest; return }
+            if (fit > 0) pages.last() += rows(rest, 0, fit, rest.yHu, used)
+            // The rest continues at the top of the next page, and what follows the
+            // table is placed relative to that page.
+            if (full || ++guard > Limits.MAX_PAGES) return
+            newPage()
+            lastY = 0
+            rest = rows(rest, fit, heights.size, 0, heights.drop(fit).sum())
         }
-        val heights = scaledRowHeights(el)
-        val room = bodyHeightHu - el.yHu
-        var fit = 0
-        var used = 0L
-        while (fit < heights.size && used + heights[fit] <= room) { used += heights[fit]; fit++ }
-        // A table starting at the top of a page keeps at least one row there.
-        if (fit == 0 && el.yHu <= 0) { fit = 1; used = heights[0] }
-        if (fit == 0) {
-            carry += el.copy(yHu = 0)
-            return
-        }
-        if (fit >= heights.size) { pages.last() += el; return }
-        pages.last() += rows(el, 0, fit, el.yHu, used)
-        carry += rows(el, fit, heights.size, 0, heights.drop(fit).sum())
     }
 
     /** Decides the pending objects once a line on a later page is known. */
@@ -102,17 +104,9 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         }
     }
 
-    private fun heightOf(el: HwpxElement): Long = when (el) {
-        is HwpxElement.TextRun -> el.heightHu
-        is HwpxElement.Table -> el.heightHu
-        is HwpxElement.ImageEl -> el.heightHu
-    }
+    private fun heightOf(el: HwpxElement): Long = el.extentHu
 
-    private fun moved(el: HwpxElement, y: Long): HwpxElement = when (el) {
-        is HwpxElement.TextRun -> el.copy(yHu = y)
-        is HwpxElement.Table -> el.copy(yHu = y)
-        is HwpxElement.ImageEl -> el.copy(yHu = y)
-    }
+    private fun moved(el: HwpxElement, y: Long): HwpxElement = el.at(el.xHu, y)
 
     private fun scaledRowHeights(t: HwpxElement.Table): List<Long> {
         val total = t.rowHeightsHu.sum().coerceAtLeast(1)

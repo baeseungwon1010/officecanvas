@@ -220,11 +220,7 @@ internal object HwpxRenderer {
         return Typeface.create(family, flags)
     }
 
-    private fun heightOf(el: HwpxElement): Long = when (el) {
-        is HwpxElement.TextRun -> el.heightHu
-        is HwpxElement.Table -> el.heightHu
-        is HwpxElement.ImageEl -> el.heightHu
-    }
+    private fun heightOf(el: HwpxElement): Long = el.extentHu
 
     private val SERIF_FACES = listOf("바탕", "명조", "궁서", "batang", "myeongjo", "gungsuh", "times", "serif", "신명", "한양신명조", "함초롬바탕")
 
@@ -233,6 +229,7 @@ internal object HwpxRenderer {
             is HwpxElement.TextRun -> { drawText(canvas, el, dx.toDouble(), dy.toDouble(), scale) }
             is HwpxElement.Table -> if (depth <= Limits.MAX_NESTING) drawTable(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
             is HwpxElement.ImageEl -> drawImage(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale)
+            is HwpxElement.Drawing -> if (depth <= Limits.MAX_NESTING) drawDrawing(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
         }
     }
 
@@ -293,6 +290,36 @@ internal object HwpxRenderer {
         }
     }
 
+    /** A rectangle, ellipse, line or polygon, filled and outlined, with any text box content on top. */
+    private fun drawDrawing(canvas: Canvas, d: HwpxElement.Drawing, zip: ZipFile?, scale: Double, depth: Int) {
+        val r = RectF((d.xHu * scale).toFloat(), (d.yHu * scale).toFloat(),
+            ((d.xHu + d.widthHu) * scale).toFloat(), ((d.yHu + d.heightHu) * scale).toFloat())
+        val path = android.graphics.Path()
+        when (d.kind) {
+            DrawingKind.RECTANGLE -> if (d.cornerPercent > 0) {
+                val radius = minOf(r.width(), r.height()) * d.cornerPercent.coerceAtMost(50) / 100f
+                path.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW)
+            } else path.addRect(r, android.graphics.Path.Direction.CW)
+            DrawingKind.ELLIPSE -> path.addOval(r, android.graphics.Path.Direction.CW)
+            DrawingKind.LINE, DrawingKind.POLYGON -> d.points.forEachIndexed { i, (px, py) ->
+                val x = ((d.xHu + px) * scale).toFloat(); val y = ((d.yHu + py) * scale).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+        }
+        if (d.kind == DrawingKind.POLYGON && d.points.size > 2) path.close()
+        if (d.kind != DrawingKind.LINE) d.fillArgb?.let { canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = it; style = Paint.Style.FILL }) }
+        d.lineArgb?.let {
+            canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = it; style = Paint.Style.STROKE; strokeWidth = (d.lineWidthHu * scale).toFloat().coerceAtLeast(1f)
+            })
+        }
+        if (d.content.isEmpty()) return
+        val bottom = d.content.maxOf { it.yHu + it.extentHu }
+        val room = (d.heightHu - bottom).coerceAtLeast(0)
+        val dy = when (d.contentVAlign) { 1 -> room / 2; 2 -> room; else -> 0L }
+        for (el in d.content) drawElement(canvas, el, d.xHu, d.yHu + dy, zip, scale, depth + 1)
+    }
+
     private fun drawImage(canvas: Canvas, image: HwpxElement.ImageEl, zip: ZipFile?, scale: Double) {
         val rect = RectF(
             (image.xHu * scale).toFloat(), (image.yHu * scale).toFloat(),
@@ -307,10 +334,21 @@ internal object HwpxRenderer {
             } ?: return
             zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES)
         } ?: return
-        val bitmap = SafeBitmaps.decode(bytes, rect.width(), rect.height()) ?: return
+        // A cropped picture is drawn at the size the whole image would have, shifted so
+        // the visible part lands in the box, and clipped to the box.
+        val c = image.crop
+        val full = if (c == null) rect else {
+            val w = rect.width() / (1f - c.left - c.right)
+            val h = rect.height() / (1f - c.top - c.bottom)
+            RectF(rect.left - c.left * w, rect.top - c.top * h, rect.left - c.left * w + w, rect.top - c.top * h + h)
+        }
+        val bitmap = SafeBitmaps.decode(bytes, full.width(), full.height()) ?: return
+        canvas.save()
         try {
-            canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            canvas.clipRect(rect)
+            canvas.drawBitmap(bitmap, null, full, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         } finally {
+            canvas.restore()
             bitmap.recycle()
         }
     }

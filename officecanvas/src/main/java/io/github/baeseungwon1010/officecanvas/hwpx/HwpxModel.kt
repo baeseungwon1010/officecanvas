@@ -114,9 +114,46 @@ internal sealed class HwpxElement {
         /** Entry name inside the .hwpx zip, e.g. "BinData/image1.png"; null when
          *  [bytes] holds the picture (a .hwp keeps pictures in OLE2 streams). */
         val zipEntry: String?,
-        val bytes: ByteArray? = null
+        val bytes: ByteArray? = null,
+        /** Fractions of the source image trimmed from each edge. */
+        val crop: ImageCrop? = null
+    ) : HwpxElement()
+
+    /**
+     * A drawing object: a rectangle (corners rounded by [cornerPercent] of the
+     * shorter side), an ellipse, or a line or polygon through [points] (relative to
+     * the box). [content] is a text box's lines, or a group's member objects,
+     * positioned relative to the box.
+     */
+    data class Drawing(
+        override val xHu: Long,
+        override val yHu: Long,
+        val widthHu: Long,
+        val heightHu: Long,
+        val kind: DrawingKind,
+        val points: List<Pair<Long, Long>> = emptyList(),
+        val cornerPercent: Int = 0,
+        val lineArgb: Int? = 0xFF000000.toInt(),
+        val lineWidthHu: Long = 0,
+        val fillArgb: Int? = null,
+        val content: List<HwpxElement> = emptyList(),
+        val contentVAlign: Int = 0
     ) : HwpxElement()
 }
+
+internal data class ImageCrop(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    companion object {
+        /** From a clip rectangle inside a [w] x [h] image; null when nothing is cut. */
+        fun of(left: Double, top: Double, right: Double, bottom: Double, w: Double, h: Double): ImageCrop? {
+            if (w <= 0 || h <= 0) return null
+            val c = ImageCrop((left / w).toFloat(), (top / h).toFloat(), ((w - right) / w).toFloat(), ((h - bottom) / h).toFloat())
+            val ok = listOf(c.left, c.top, c.right, c.bottom).all { it in 0f..0.95f } && c.left + c.right < 0.95f && c.top + c.bottom < 0.95f
+            return if (ok && (c.left > 0.001f || c.top > 0.001f || c.right > 0.001f || c.bottom > 0.001f)) c else null
+        }
+    }
+}
+
+internal enum class DrawingKind { RECTANGLE, ELLIPSE, LINE, POLYGON }
 
 internal data class TableCell(
     val colSpan: Int,
@@ -130,4 +167,21 @@ internal data class TableCell(
     val vAlign: Int = 0
 ) {
     val runs: List<HwpxElement.TextRun> get() = elements.filterIsInstance<HwpxElement.TextRun>()
+}
+
+/** How far an element reaches down from its top. */
+internal val HwpxElement.extentHu: Long
+    get() = when (this) {
+        is HwpxElement.TextRun -> heightHu
+        is HwpxElement.Table -> heightHu
+        is HwpxElement.ImageEl -> heightHu
+        is HwpxElement.Drawing -> heightHu
+    }
+
+/** The element moved to ([x], [y]). */
+internal fun HwpxElement.at(x: Long, y: Long): HwpxElement = when (this) {
+    is HwpxElement.TextRun -> copy(xHu = x, yHu = y)
+    is HwpxElement.Table -> copy(xHu = x, yHu = y)
+    is HwpxElement.ImageEl -> copy(xHu = x, yHu = y)
+    is HwpxElement.Drawing -> copy(xHu = x, yHu = y)
 }

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.RectF
 import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
+import io.github.baeseungwon1010.officecanvas.hwpx.HwpxRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.TiffDecoder
@@ -371,6 +372,56 @@ class MaliciousInputTest {
         var pages = 0
         survives(30) { pages = hwp(para).pages.size }
         assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
+    /** A paragraph holding one drawing object (gso, [w] x [h]) built from [shape] records (level 2 and below). */
+    private fun hwpDrawing(w: Int, h: Int, shape: ByteArray): ByteArray =
+        hwpRec(66, 0, ByteArray(24)) +
+            hwpRec(67, 1, le(18).putShort(0, 11).putShort(14, 11).putShort(16, 13).array()) +
+            hwpRec(69, 1, le(36).putInt(8, 1000).array()) +
+            hwpRec(71, 1, le(46).putInt(0, 0x67736F20).putInt(4, 1).putInt(16, w).putInt(20, h).array()) + shape
+
+    /** A shape component of kind [id] ("\$con", "\$pol", ...), its id repeated when top-level. */
+    private fun hwpShape(id: String, level: Int, extra: ByteBuffer.() -> Unit = {}): ByteArray {
+        val code = id.fold(0) { acc, c -> (acc shl 8) or c.code }
+        val o = if (level == 2) 8 else 4
+        return hwpRec(76, level, le(300).apply { putInt(0, code); if (o == 8) putInt(4, code); putInt(o + 12, 1000); putInt(o + 16, 1000); extra() }.array())
+    }
+
+    @Test
+    fun `HWP drawing groups nested a thousand levels deep`() {
+        val out = ByteArrayOutputStream()
+        for (level in 2 until 1023) out.write(hwpShape("\$con", level))
+        survives(10) { hwp(hwpDrawing(1000, 1000, out.toByteArray())) }
+    }
+
+    @Test
+    fun `an HWP polygon claiming two billion points and absurd matrices`() {
+        val shape = hwpShape("\$pol", 2) {
+            // 65535 scale/rotation pairs, and a translation full of infinities.
+            putShort(8 + 42, -1)
+            for (i in 0 until 6) putDouble(8 + 44 + 8 * i, Double.POSITIVE_INFINITY)
+        } + hwpRec(82, 3, le(4 + 8 * 1000).putInt(0, Int.MAX_VALUE).array())
+        survives(10) {
+            HwpxRenderer.render(hwp(hwpDrawing(1000, 1000, shape)), File("missing.hwp"), 400) { _, b -> b.recycle() }
+        }
+    }
+
+    @Test
+    fun `HWPX drawing containers nested five thousand deep`() {
+        val open = (0 until 5000).joinToString("") { """<hp:container><hp:sz width="1000" height="1000"/>""" }
+        val close = "</hp:container>".repeat(5000)
+        val file = hwpx("""<hs:sec $hs><hp:p><hp:run>$open$close</hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" horzsize="100"/></hp:linesegarray></hp:p></hs:sec>""")
+        survives(10) { render(file) }
+    }
+
+    @Test
+    fun `an HWPX polygon with a hundred thousand points and a huge relative size`() {
+        val hc = """xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core""""
+        val points = (0 until 100_000).joinToString("") { """<hc:pt x="${it % 977 * 1000}" y="${it % 13 * 70000}"/>""" }
+        val matrices = """<hc:scaMatrix e1="1e300" e2="0" e3="0" e4="0" e5="NaN" e6="0"/>""".repeat(1000)
+        val file = hwpx("""<hs:sec $hs $hc><hp:p><hp:run><hp:polygon><hp:sz width="2000000000" widthRelTo="PARA" height="1000" heightRelTo="ABSOLUTE"/><hp:renderingInfo>$matrices</hp:renderingInfo><hp:lineShape color="#000000" width="10" style="SOLID"/>$points</hp:polygon></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" horzsize="100"/></hp:linesegarray></hp:p></hs:sec>""")
+        survives(30) { render(file, longSide = 400) }
     }
 
     @Test

@@ -38,10 +38,13 @@ internal object HwpxParser {
     /** One page's worth of geometry, read from the first paragraph's <hp:secPr>
      *  (later sections reuse the last one seen if they omit their own). */
     /** [bottomHu]: bottom margin plus footer area, below the body. */
-    private data class PageGeometry(val widthHu: Long, val heightHu: Long, val bodyXHu: Long = 0, val bodyYHu: Long = 0, val bottomHu: Long = 0)
+    private data class PageGeometry(
+        val widthHu: Long, val heightHu: Long, val bodyXHu: Long = 0, val bodyYHu: Long = 0, val bottomHu: Long = 0,
+        val rightHu: Long = 0, val bottomMarginHu: Long = 0, val headerHu: Long = 0, val footerHu: Long = 0
+    )
 
     fun parse(file: File): HwpxDoc = ZipFile(file).use { zip ->
-        lineStarts.get().clear()
+        state.set(State())
         val contentDoc = zip.xml("Contents/content.hpf")
             ?: throw ParseException("not a .hwpx: Contents/content.hpf is missing")
         val manifest = contentDoc.first(OPF, "manifest")?.all(OPF, "item")
@@ -67,7 +70,7 @@ internal object HwpxParser {
             if (pages.size >= Limits.MAX_PAGES) break
             try {
                 val doc = zip.xml(path) ?: continue
-                parseSection(doc, header, lastGeometry).forEach { (geometry, page) ->
+                parseSection(doc, header, lastGeometry, pages.size).forEach { (geometry, page) ->
                     lastGeometry = geometry
                     if (pages.size < Limits.MAX_PAGES) pages += page
                 }
@@ -76,7 +79,7 @@ internal object HwpxParser {
                 if (DEBUG_LOG_ERRORS) e.printStackTrace()
             }
         }
-        lineStarts.get().clear()
+        state.remove()
         HwpxDoc(pages)
     }
 
@@ -84,7 +87,7 @@ internal object HwpxParser {
      *  reset to a smaller value than the previous line means Hangul started a new
      *  page when it saved this file (verified against a real 3-page document —
      *  see [HwpxDoc]). */
-    private fun parseSection(doc: Document, header: Header, fallbackGeometry: PageGeometry): List<Pair<PageGeometry, HwpxPage>> {
+    private fun parseSection(doc: Document, header: Header, fallbackGeometry: PageGeometry, firstPageIndex: Int): List<Pair<PageGeometry, HwpxPage>> {
         val root = doc.documentElement
         val paragraphs = root.all(HP, "p")
         val secPr = paragraphs.firstOrNull()?.run(HP, "run")?.child(HP, "secPr")
@@ -97,20 +100,67 @@ internal object HwpxParser {
             val bodyX = (margin?.longOrNull("left") ?: 0L) + (margin?.longOrNull("gutter") ?: 0L)
             val bodyY = (margin?.longOrNull("top") ?: 0L) + (margin?.longOrNull("header") ?: 0L)
             val bottom = (margin?.longOrNull("bottom") ?: 0L) + (margin?.longOrNull("footer") ?: 0L)
-            if (w != null && h != null && w > 0 && h > 0) PageGeometry(w, h, bodyX, bodyY, bottom) else null
+            if (w != null && h != null && w > 0 && h > 0) {
+                PageGeometry(w, h, bodyX, bodyY, bottom, margin?.longOrNull("right") ?: 0L, margin?.longOrNull("bottom") ?: 0L,
+                    margin?.longOrNull("header") ?: 0L, margin?.longOrNull("footer") ?: 0L)
+            } else null
         } ?: fallbackGeometry
 
+        state.get().apply {
+            bodyXHu = geometry.bodyXHu; bodyYHu = geometry.bodyYHu
+            bodyWidthHu = (geometry.widthHu - geometry.bodyXHu - geometry.rightHu).coerceAtLeast(1)
+        }
+
+        val pg = PageDecor.Geometry(geometry.widthHu, geometry.heightHu, geometry.bodyXHu, geometry.bodyYHu,
+            geometry.rightHu, geometry.bottomMarginHu, geometry.headerHu, geometry.footerHu)
+
         val flow = PageFlow(geometry.heightHu - geometry.bodyYHu - geometry.bottomHu)
+        val decor = DecorTimeline()
         for (p in paragraphs) {
             if (flow.full) break
             // pageBreak="1": the paragraph starts a page even when its first line
             // sits as high as the previous page's last paragraph did.
             val forcedBreak = p.getAttribute("pageBreak") == "1"
             for ((k, el) in parseParagraphFlow(p, header, 0).withIndex()) {
-                flow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in lineStarts.get())
+                flow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in state.get().lineStarts,
+                    floating = el in state.get().placedFloating)
+            }
+            // Header, footer and page number controls apply from the page their
+            // paragraph starts on (flow.page is approximate for a paragraph that
+            // runs onto the next page, where these controls are rare).
+            for (ctrl in p.all(HP, "run").flatMap { it.all(HP, "ctrl") }.flatMap { it.children() }) {
+                decorControl(ctrl, header)?.let { decor.change(flow.page, it) }
             }
         }
-        return flow.finish().map { geometry to HwpxPage(geometry.widthHu, geometry.heightHu, it, geometry.bodyXHu, geometry.bodyYHu) }
+        var number = firstPageIndex
+        return flow.finish().map { (index, elements) ->
+            number++
+            geometry to HwpxPage(geometry.widthHu, geometry.heightHu,
+                decor.at(index).elements(number, pg) + elements.map { it.withPageNumber(number) },
+                geometry.bodyXHu, geometry.bodyYHu)
+        }
+    }
+
+    /** A header, footer or page number control as a change to the page decoration. */
+    private fun decorControl(ctrl: DomElement, header: Header): ((PageDecor) -> PageDecor)? = when (ctrl.localName) {
+        "header", "footer" -> ctrl.child(HP, "subList")?.let { list ->
+            val area = DecorArea(
+                list.all(HP, "p").withIndex().flatMap { (k, p) -> parseParagraphFlow(p, header, 1, firstInList = k == 0) },
+                when (list.getAttribute("vertAlign")) { "CENTER" -> 1; "BOTTOM" -> 2; else -> 0 }
+            )
+            val pages = when (ctrl.getAttribute("applyPageType")) { "EVEN" -> 1; "ODD" -> 2; else -> 0 }
+            if (ctrl.localName == "header") { d: PageDecor -> d.withHeader(area, pages) } else { d: PageDecor -> d.withFooter(area, pages) }
+        }
+        "pageNum" -> {
+            val pos = when (ctrl.getAttribute("pos")) {
+                "TOP_LEFT" -> 1; "TOP_CENTER" -> 2; "TOP_RIGHT" -> 3
+                "BOTTOM_LEFT" -> 4; "BOTTOM_CENTER" -> 5; "BOTTOM_RIGHT" -> 6
+                else -> null
+            }
+            val side = ctrl.getAttribute("sideChar").trim()
+            ({ d: PageDecor -> d.copy(pageNumberPosition = pos, pageNumberSide = side) })
+        }
+        else -> null
     }
 
     /** Marks an inline table/picture's spot in a paragraph's character stream —
@@ -130,10 +180,144 @@ internal object HwpxParser {
      * would misdraw its position and corrupt page-break detection (a table's y
      * would then look like it went backwards on every page that has one).
      */
-    /** Elements that begin a line (see PageFlow.add); identity, not equality. */
-    private val lineStarts = ThreadLocal.withInitial { java.util.Collections.newSetFromMap(java.util.IdentityHashMap<HwpxElement, Boolean>()) }
+    /** Per-document parsing state (the parser object is shared). */
+    private class State {
+        /** Elements that begin a line (see PageFlow.add); identity, not equality. */
+        val lineStarts: MutableSet<HwpxElement> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+        /** Objects placed by offsets rather than in a line, before and after placing. */
+        val floatingOf = java.util.IdentityHashMap<HwpxElement, Floating>()
+        val placedFloating: MutableSet<HwpxElement> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+        var bodyXHu = 0L
+        var bodyYHu = 0L
+        var bodyWidthHu = 42520L
+    }
 
-    private fun parseParagraphFlow(p: DomElement, header: Header, depth: Int): List<HwpxElement> {
+    private val state = ThreadLocal.withInitial { State() }
+
+    /** <hp:pos>: references (PAPER, PAGE, PARA/COLUMN) and offsets; [takesLines]:
+     *  text wraps above and below it; [keepsBelowAnchor] as in HwpParser (such an
+     *  object that also moves with the text). */
+    private class Floating(
+        val vertRel: String, val horzRel: String, val vertOffset: Long, val horzOffset: Long,
+        val takesLines: Boolean, val keepsBelowAnchor: Boolean
+    )
+
+    /** Records how [obj] is placed when its <hp:pos> doesn't treat it as a character. */
+    private fun <T : HwpxElement> T.positionedBy(owner: DomElement): T {
+        val pos = owner.child(HP, "pos") ?: return this
+        if (pos.getAttribute("treatAsChar") == "1") return this
+        val takesLines = owner.getAttribute("textWrap") == "TOP_AND_BOTTOM"
+        state.get().floatingOf[this] = Floating(
+            pos.getAttribute("vertRelTo"), pos.getAttribute("horzRelTo"), pos.long("vertOffset"), pos.long("horzOffset"),
+            takesLines, takesLines && pos.getAttribute("flowWithText") == "1"
+        )
+        return this
+    }
+
+    /** An object at its line ([x], [y], [lineHeight]; [textFirstLine]: its
+     *  paragraph's first, holding text), or by its offsets when it floats. */
+    private fun place(obj: HwpxElement, x: Long, y: Long, textFirstLine: Boolean, lineHeight: Long): HwpxElement {
+        val s = state.get()
+        val f = s.floatingOf[obj] ?: return obj.at(x, y)
+        val px = when (f.horzRel) { "PAPER" -> f.horzOffset - s.bodyXHu; "PAGE" -> f.horzOffset; else -> x + f.horzOffset }
+        val py = when (f.vertRel) {
+            "PAPER" -> f.vertOffset - s.bodyYHu
+            "PAGE" -> f.vertOffset
+            else -> paragraphRelativeY(f.vertOffset, f.takesLines, f.keepsBelowAnchor, obj.extentHu, y, textFirstLine, lineHeight)
+        }
+        return obj.at(px, py).also { s.placedFloating += it }
+    }
+
+    /** An object's size from <hp:sz>, which may be a percentage (in 1/100 %) of
+     *  the paragraph's or page's width or height instead of HWPUNIT. */
+    private fun sizeOf(owner: DomElement): Pair<Long, Long>? {
+        val sz = owner.child(HP, "sz") ?: return null
+        val s = state.get()
+        fun dim(value: Long, rel: String, ref: Long) = if (rel.isBlank() || rel == "ABSOLUTE") value else value * ref / 10000
+        val w = dim(sz.long("width"), sz.getAttribute("widthRelTo"), s.bodyWidthHu)
+        val h = dim(sz.long("height"), sz.getAttribute("heightRelTo"), s.bodyWidthHu)
+        // A straight line has no height (or width).
+        return if (w >= 0 && h >= 0 && w + h > 0) w to h else null
+    }
+
+    private val SHAPES = setOf("rect", "ellipse", "line", "polygon", "container", "arc", "curve")
+
+    /** A drawing object (<hp:rect>, <hp:line>, ...): one shape, or a group of them. */
+    private fun parseDrawing(el: DomElement, header: Header, depth: Int): HwpxElement? {
+        val (w, h) = sizeOf(el) ?: return null
+        val members = drawingMembers(el, IDENTITY, header, depth, w, h)
+        if (members.isEmpty()) return null
+        val single = members.singleOrNull()
+        return if (single != null && single.xHu == 0L && single.yHu == 0L) single
+        else HwpxElement.Drawing(0, 0, w, h, DrawingKind.RECTANGLE, lineArgb = null, content = members)
+    }
+
+    /**
+     * Shapes in the object's box: each maps its original-size coordinates through
+     * its rendering matrices (translation, then scale and rotation pairs) into its
+     * parent's, a group's members through the group's. A top-level shape whose
+     * matrices leave it at its original size is stretched to the object's size.
+     */
+    private fun drawingMembers(el: DomElement, parent: DoubleArray, header: Header, depth: Int, boxW: Long, boxH: Long): List<HwpxElement.Drawing> {
+        if (depth > Limits.MAX_NESTING) return emptyList()
+        val info = el.child(HP, "renderingInfo")
+        var m = parent
+        for (mx in info?.children().orEmpty()) {
+            val e = DoubleArray(6) { mx.getAttribute("e${it + 1}").toDoubleOrNull() ?: if (it == 0 || it == 4) 1.0 else 0.0 }
+            if (e.all { it.isFinite() && kotlin.math.abs(it) < 1e7 }) m = multiply(m, e)
+        }
+        if (el.localName == "container") {
+            return el.children().filter { it.localName in SHAPES }.flatMap { drawingMembers(it, m, header, depth + 1, boxW, boxH) }
+        }
+        val org = el.child(HP, "orgSz")
+        val ow = (org?.long("width") ?: boxW).toDouble().coerceAtLeast(1.0)
+        val oh = (org?.long("height") ?: boxH).toDouble().coerceAtLeast(1.0)
+        if (depth == 0 && m.contentEquals(IDENTITY)) m = doubleArrayOf(boxW / ow, 0.0, 0.0, 0.0, boxH / oh, 0.0)
+        fun mapped(pts: List<Pair<Double, Double>>) = pts.map { (x, y) -> (m[0] * x + m[1] * y + m[2]) to (m[3] * x + m[4] * y + m[5]) }
+        val corners = listOf(0.0 to 0.0, ow to 0.0, ow to oh, 0.0 to oh)
+        fun pt(name: String) = el.child(HC, name)?.let { it.long("x").toDouble() to it.long("y").toDouble() }
+        val (kind, points) = when (el.localName) {
+            "rect" -> DrawingKind.RECTANGLE to mapped(corners)
+            "ellipse", "arc" -> DrawingKind.ELLIPSE to mapped(corners)
+            "line" -> DrawingKind.LINE to mapped(listOfNotNull(pt("startPt"), pt("endPt")))
+            "polygon", "curve" -> DrawingKind.POLYGON to mapped(el.all(HC, "pt").map { it.long("x").toDouble() to it.long("y").toDouble() })
+            else -> return emptyList()
+        }
+        if (points.size < 2 && kind != DrawingKind.RECTANGLE) return emptyList()
+        val minX = points.minOf { it.first }; val minY = points.minOf { it.second }
+        val w = (points.maxOf { it.first } - minX).toLong().coerceAtLeast(1)
+        val h = (points.maxOf { it.second } - minY).toLong().coerceAtLeast(1)
+        val rel = points.map { (x, y) -> (x - minX).toLong() to (y - minY).toLong() }
+        val line = el.child(HP, "lineShape")
+        val lineArgb = line?.takeIf { it.getAttribute("style").let { s -> s.isNotBlank() && s != "NONE" } }?.getAttribute("color")?.let(::hexColor)
+        val fill = el.child(HC, "fillBrush")?.child(HC, "winBrush")?.getAttribute("faceColor")?.let(::hexColor)
+        // A text box: <hp:drawText> with margins and a list of paragraphs.
+        val drawText = el.child(HP, "drawText")
+        val margin = drawText?.child(HP, "textMargin")
+        val list = drawText?.child(HP, "subList")
+        val content = list?.all(HP, "p").orEmpty().withIndex().flatMap { (k, p) -> parseParagraphFlow(p, header, depth + 1, firstInList = k == 0) }
+            .map { it.at(it.xHu + (margin?.long("left") ?: 0L), it.yHu + (margin?.long("top") ?: 0L)) }
+        val axisAligned = kind != DrawingKind.RECTANGLE || rel.all { (x, y) -> (x == 0L || x == w) && (y == 0L || y == h) }
+        return listOf(HwpxElement.Drawing(
+            minX.toLong(), minY.toLong(), w, h, if (axisAligned) kind else DrawingKind.POLYGON, rel,
+            el.getAttribute("ratio").toIntOrNull() ?: 0, lineArgb, line?.long("width") ?: 0L, fill, content,
+            when (list?.getAttribute("vertAlign")) { "CENTER" -> 1; "BOTTOM" -> 2; else -> 0 }
+        ))
+    }
+
+    private fun hexColor(v: String): Int? = v.removePrefix("#").takeIf { it.length == 6 }?.toIntOrNull(16)?.let { (0xFF shl 24) or it }
+
+    /** 2x3 affine matrices [a, b, c, d, e, f]: x' = a x + b y + c, y' = d x + e y + f. */
+    private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+    private fun multiply(m: DoubleArray, n: DoubleArray) = doubleArrayOf(
+        m[0] * n[0] + m[1] * n[3], m[0] * n[1] + m[1] * n[4], m[0] * n[2] + m[1] * n[5] + m[2],
+        m[3] * n[0] + m[4] * n[3], m[3] * n[1] + m[4] * n[4], m[3] * n[2] + m[4] * n[5] + m[5]
+    )
+
+
+    /** [firstInList]: [p] starts a header, footer or text box (its top is the list's top). */
+    private fun parseParagraphFlow(p: DomElement, header: Header, depth: Int, firstInList: Boolean = false): List<HwpxElement> {
         val text = StringBuilder()
         val inlineAt = mutableMapOf<Int, HwpxElement>() // stream offset -> object
         // Marks where each run's text starts in the concatenated stream, so a
@@ -149,8 +333,14 @@ internal object HwpxParser {
                         runBoundaries += text.length to style
                         text.append(child.textContent ?: "")
                     }
-                    "tbl" -> parseTable(child, header, depth + 1)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
-                    "pic" -> parsePicture(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    "tbl" -> parseTable(child, header, depth + 1)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    "pic" -> parsePicture(child)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    in SHAPES -> parseDrawing(child, header, depth + 1)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    // A page number field (in headers and footers, mostly).
+                    "ctrl" -> if (child.children().any { it.localName == "autoNum" && it.getAttribute("numType") == "PAGE" }) {
+                        runBoundaries += text.length to style
+                        text.append(PAGE_NUMBER_MARK)
+                    }
                 }
             }
         }
@@ -175,7 +365,8 @@ internal object HwpxParser {
             var runStart = start
             val lineFirst = out.size
             fun emit(el: HwpxElement) {
-                if (out.size == lineFirst) lineStarts.get() += el
+                val st = state.get()
+                if (el !in st.placedFloating && out.drop(lineFirst).all { it in st.placedFloating }) st.lineStarts += el
                 out += el
             }
             for (offset in start until end) {
@@ -183,7 +374,8 @@ internal object HwpxParser {
                 if (offset > runStart) {
                     textRunFrom(text, runStart, offset, runBoundaries, seg, align, last)?.let { emit(it) }
                 }
-                emit(obj.withPosition(seg.long("horzpos"), seg.long("vertpos")))
+                val textFirstLine = firstInList && i == 0 && text.substring(start, end).any { it != INLINE_OBJECT_MARKER && it != PAGE_NUMBER_MARK && !it.isWhitespace() }
+                emit(place(obj, seg.long("horzpos"), seg.long("vertpos"), textFirstLine, seg.long("vertsize")))
                 runStart = offset + 1
             }
             if (runStart < end) {
@@ -235,11 +427,7 @@ internal object HwpxParser {
     private fun HwpxElement.fitTo(width: Long): HwpxElement =
         if (this is HwpxElement.TextRun && width > 0 && xHu + widthHu > width) copy(widthHu = (width - xHu).coerceAtLeast(width / 4)) else this
 
-    private fun HwpxElement.withPosition(x: Long, y: Long): HwpxElement = when (this) {
-        is HwpxElement.Table -> copy(xHu = x, yHu = y)
-        is HwpxElement.ImageEl -> copy(xHu = x, yHu = y)
-        is HwpxElement.TextRun -> copy(xHu = x, yHu = y)
-    }
+    private fun HwpxElement.withPosition(x: Long, y: Long): HwpxElement = at(x, y)
 
     private fun parseTable(tbl: DomElement, header: Header, depth: Int): HwpxElement.Table? {
         if (depth > Limits.MAX_NESTING) return null
@@ -300,11 +488,19 @@ internal object HwpxParser {
             // cell's size is left to the rows/columns it spans, not attributed to
             // just the first one.
             if (rowSpan == 1) {
-                val contentBottom = cellRuns.filterIsInstance<HwpxElement.TextRun>().maxOfOrNull { it.yHu + it.heightHu } ?: 0L
+                // Pictures and nested tables count too, not just lines of text.
+                val contentBottom = cellRuns.maxOfOrNull { it.yHu + it.extentHu } ?: 0L
                 rowHeights[row] = maxOf(rowHeights[row] ?: 0L, contentBottom)
             }
             if (colSpan == 1) {
-                val contentRight = cellRuns.filterIsInstance<HwpxElement.TextRun>().maxOfOrNull { it.xHu + it.widthHu } ?: 0L
+                val contentRight = cellRuns.maxOfOrNull { el ->
+                    el.xHu + when (el) {
+                        is HwpxElement.TextRun -> el.widthHu
+                        is HwpxElement.Table -> el.widthHu
+                        is HwpxElement.ImageEl -> el.widthHu
+                        is HwpxElement.Drawing -> el.widthHu
+                    }
+                } ?: 0L
                 colWidths[col] = maxOf(colWidths[col] ?: 0L, contentRight)
             }
             rows[row][col] = TableCell(
@@ -326,14 +522,24 @@ internal object HwpxParser {
     }
 
     private fun parsePicture(pic: DomElement): HwpxElement.ImageEl? {
-        val sz = pic.child(HP, "sz") ?: return null
+        val (picW, picH) = sizeOf(pic)?.takeIf { it.first > 0 && it.second > 0 } ?: return null
         val img = pic.child(HC, "img") ?: return null
         val entry = img.getAttribute("binaryItemIDRef").ifBlank { null } ?: return null
         // The actual zip path for a binary item follows a fixed convention
         // (BinData/<id>.<ext>) but the extension isn't in this reference — resolved
         // by the caller matching a real zip entry, since guessing the extension
         // here would silently draw nothing for anything but the common ones.
-        return HwpxElement.ImageEl(0, 0, sz.long("width"), sz.long("height"), entry)
+        // <hp:imgClip> is the visible part of the picture within its full size,
+        // <hp:imgDim> (or, without it, <hp:imgRect>'s corners).
+        val rect = pic.child(HP, "imgRect")
+        val clip = pic.child(HP, "imgClip")
+        val dim = pic.child(HP, "imgDim")?.takeIf { it.long("dimwidth") > 0 && it.long("dimheight") > 0 }
+        val crop = if (clip != null && (dim != null || rect != null)) {
+            val w = dim?.long("dimwidth")?.toDouble() ?: rect?.child(HC, "pt2")?.long("x")?.toDouble() ?: 0.0
+            val h = dim?.long("dimheight")?.toDouble() ?: rect?.child(HC, "pt2")?.long("y")?.toDouble() ?: 0.0
+            ImageCrop.of(clip.long("left").toDouble(), clip.long("top").toDouble(), clip.long("right").toDouble(), clip.long("bottom").toDouble(), w, h)
+        } else null
+        return HwpxElement.ImageEl(0, 0, picW, picH, entry, crop = crop)
     }
 
     private fun parseHeader(doc: Document): Header {

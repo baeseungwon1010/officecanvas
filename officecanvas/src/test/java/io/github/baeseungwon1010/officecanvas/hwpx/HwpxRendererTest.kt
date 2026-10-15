@@ -1,6 +1,8 @@
 package io.github.baeseungwon1010.officecanvas.hwpx
 
 import android.graphics.Bitmap
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -50,6 +52,76 @@ class HwpxRendererTest {
             }
         }
         println("Rendered PNGs written to: ${outDir.absolutePath}")
+    }
+
+    // sample.hwpx (tools/make_sample_hwpx.py) carries a header with the page
+    // number field, a page number control, a floating text box, an inline line
+    // and a cropped picture.
+    private val doc by lazy { HwpxParser.parse(sample("sample.hwpx")) }
+
+    private fun runs(page: Int) = doc.pages[page].elements.filterIsInstance<HwpxElement.TextRun>()
+
+    @Test
+    fun `header and page number repeat on every page`() {
+        for (i in doc.pages.indices) {
+            val r = runs(i)
+            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 샘플 · 쪽 ${i + 1}" && it.yHu < 0 })
+            assertTrue("page number on page ${i + 1}", r.any { it.text == "- ${i + 1} -" && it.align == ParaAlign.CENTER })
+        }
+    }
+
+    @Test
+    fun `a floating text box sits at its offsets from the paragraph`() {
+        val page = doc.pages.indexOfFirst { p -> p.elements.any { it is HwpxElement.Drawing && it.kind == DrawingKind.RECTANGLE } }
+        val box = doc.pages[page].elements.filterIsInstance<HwpxElement.Drawing>().single { it.kind == DrawingKind.RECTANGLE }
+        val anchor = runs(page).first { it.text.startsWith("(9)") }
+        assertEquals(42520L - 14000L, box.xHu)
+        assertEquals(anchor.yHu + 1500L, box.yHu)
+        assertEquals(14000L to 4000L, box.widthHu to box.heightHu)
+        assertEquals(0xFF1F3864.toInt(), box.lineArgb)
+        assertEquals(0xFFDDEBF7.toInt(), box.fillArgb)
+        assertEquals(1, box.contentVAlign)
+        val text = box.content.filterIsInstance<HwpxElement.TextRun>().single()
+        assertEquals("글상자 안의 글", text.text)
+        assertEquals(283L, text.xHu) // the left margin
+        assertTrue(runs(page).any { it.text.startsWith("(10)") })
+        assertColor(listOf(0xDD, 0xEB, 0xF7), render(page).pixelAt(doc.pages[page], box.xHu + box.widthHu - 1500, box.yHu + 600))
+    }
+
+    @Test
+    fun `lines are drawn with their color`() {
+        val page = doc.pages.indexOfFirst { p -> p.elements.any { it is HwpxElement.Drawing && it.kind == DrawingKind.LINE } }
+        val line = doc.pages[page].elements.filterIsInstance<HwpxElement.Drawing>().single { it.kind == DrawingKind.LINE }
+        assertEquals(listOf(0L to 0L, 42520L to 0L), line.points)
+        assertEquals(0xFFC00000.toInt(), line.lineArgb)
+        assertColor(listOf(0xC0, 0, 0), render(page, 4000).pixelAt(doc.pages[page], line.xHu + 20000, line.yHu))
+    }
+
+    @Test
+    fun `pictures are cropped to their clip`() {
+        // The image is red on the left and blue on the right; the clip keeps the
+        // right half, so even the picture's left quarter is blue.
+        val image = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.ImageEl>().single()
+        assertEquals(0.5f, image.crop!!.left, 0.001f)
+        val page = doc.pages.indexOfFirst { image in it.elements }
+        assertColor(listOf(40, 70, 200), render(page).pixelAt(doc.pages[page], image.xHu + image.widthHu / 4, image.yHu + image.heightHu / 2))
+    }
+
+    private fun render(page: Int, longSide: Int = 1000): Bitmap {
+        var bitmap: Bitmap? = null
+        HwpxRenderer.render(doc.copy(pages = listOf(doc.pages[page])), sample("sample.hwpx"), longSide) { _, b -> bitmap = b }
+        return bitmap!!
+    }
+
+    /** The pixel at body coordinates ([x], [y] in HWPUNIT) of a rendered page. */
+    private fun Bitmap.pixelAt(p: HwpxPage, x: Long, y: Long): Int {
+        val scale = height.toDouble() / p.heightHu
+        return getPixel(((p.bodyXHu + x) * scale).toInt(), ((p.bodyYHu + y) * scale).toInt())
+    }
+
+    private fun assertColor(expected: List<Int>, pixel: Int) {
+        val actual = listOf((pixel shr 16) and 0xFF, (pixel shr 8) and 0xFF, pixel and 0xFF)
+        assertTrue("pixel $actual, expected $expected", expected.zip(actual).all { (e, a) -> kotlin.math.abs(e - a) <= 6 })
     }
 
     private fun sampleDistinctColors(bmp: Bitmap): Int {
