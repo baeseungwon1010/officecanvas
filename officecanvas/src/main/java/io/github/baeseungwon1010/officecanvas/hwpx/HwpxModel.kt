@@ -242,3 +242,40 @@ internal fun HwpxElement.at(x: Long, y: Long): HwpxElement = when (this) {
     is HwpxElement.Drawing -> copy(xHu = x, yHu = y)
     is HwpxElement.Equation -> copy(xHu = x, yHu = y)
 }
+
+/** A cell's place along one side of a table's grid: its first column, how many it spans, its width. */
+internal data class GridSpan(val start: Int, val span: Int, val sizeHu: Long)
+
+/**
+ * The widths of a table's [count] columns, worked out from where each cell's
+ * edges fall: a cell's right edge is its left edge plus its width, so every row
+ * places some of the column lines, including those only spanned cells reach. A
+ * line no cell places is spread evenly between its neighbours. Null when the
+ * cells don't add up to a grid (a line before the one to its left).
+ */
+internal fun gridSizes(cells: List<GridSpan>, count: Int, totalHu: Long): List<Long>? {
+    if (count <= 0) return null
+    val edge = arrayOfNulls<Long>(count + 1)
+    edge[0] = 0L
+    var changed = true
+    while (changed) {
+        changed = false
+        for ((start, span, size) in cells) {
+            if (start !in 0 until count || size <= 0) continue
+            val end = (start + span.coerceAtLeast(1)).coerceAtMost(count)
+            val a = edge[start]; val b = edge[end]
+            if (a != null && b == null) { edge[end] = a + size; changed = true }
+            else if (a == null && b != null && b - size >= 0) { edge[start] = b - size; changed = true }
+        }
+    }
+    if (edge[count] == null) edge[count] = maxOf(totalHu, edge.filterNotNull().max())
+    var i = 0
+    while (i < count) {
+        val next = (i + 1..count).first { edge[it] != null }
+        val a = edge[i]!!; val b = edge[next]!!
+        for (k in i + 1 until next) edge[k] = a + (b - a) * (k - i) / (next - i)
+        i = next
+    }
+    val sizes = (0 until count).map { edge[it + 1]!! - edge[it]!! }
+    return sizes.takeIf { s -> s.all { it > 0 } }
+}

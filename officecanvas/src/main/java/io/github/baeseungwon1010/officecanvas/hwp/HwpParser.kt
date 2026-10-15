@@ -3,6 +3,8 @@ package io.github.baeseungwon1010.officecanvas.hwp
 import io.github.baeseungwon1010.officecanvas.hwpx.Border
 import io.github.baeseungwon1010.officecanvas.hwpx.BorderFill
 import io.github.baeseungwon1010.officecanvas.hwpx.CharStyle
+import io.github.baeseungwon1010.officecanvas.hwpx.GridSpan
+import io.github.baeseungwon1010.officecanvas.hwpx.gridSizes
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorArea
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorTimeline
 import io.github.baeseungwon1010.officecanvas.hwpx.BulletDef
@@ -847,6 +849,7 @@ internal object HwpParser {
             val colCnt = t.u16(6).coerceIn(1, cells.maxOf { it.col } + 1)
             val grid = MutableList(rowCnt) { MutableList<TableCell?>(colCnt) { null } }
             val colWidths = HashMap<Int, Long>()
+            val spans = ArrayList<GridSpan>()
             val rowHeights = HashMap<Int, Long>()
             val contentHeights = HashMap<Int, Long>()
             for (cell in cells) {
@@ -867,6 +870,7 @@ internal object HwpParser {
                         el.copy(widthHu = (cell.marginLeft + inner - el.xHu).coerceAtLeast(inner / 4)) else el
                 }
                 if (cell.colSpan == 1) colWidths[cell.col] = maxOf(colWidths[cell.col] ?: 0L, cell.w)
+                spans += GridSpan(cell.col, cell.colSpan, cell.w)
                 // A cell's declared size is what it had when its row last fit on a
                 // page; content running over pages reaches further than that. Only
                 // lines that follow on from each other count: a stray line saved far
@@ -901,7 +905,8 @@ internal object HwpParser {
             }
             return HwpxElement.Table(
                 xHu = 0, yHu = 0, widthHu = width, heightHu = maxOf(declared, rowsHu.sum()),
-                columnWidthsHu = (0 until colCnt).map { colWidths[it] ?: (width / colCnt) },
+                // Columns only spanned cells cover get their width from where those cells end.
+                columnWidthsHu = gridSizes(spans, colCnt, width) ?: (0 until colCnt).map { colWidths[it] ?: (width / colCnt) },
                 rowHeightsHu = rowsHu,
                 cells = grid
             )

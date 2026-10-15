@@ -515,6 +515,8 @@ internal object HwpxParser {
         if (rowCnt == 0 || colCnt == 0) return null
         val rows = MutableList(rowCnt) { MutableList<TableCell?>(colCnt) { null } }
         val colWidths = sortedMapOf<Int, Long>()
+        val spans = ArrayList<GridSpan>()
+        val rowSpans = ArrayList<GridSpan>()
         val rowHeights = sortedMapOf<Int, Long>()
 
         // <hp:tc> sits inside <hp:tr> (one per row), not directly under <hp:tbl>.
@@ -544,17 +546,18 @@ internal object HwpxParser {
                 .map { it.fitTo(tc.child(HP, "cellSz")?.long("width")?.minus((margin?.long("left") ?: 0L) + (margin?.long("right") ?: 0L)) ?: 0L) }
             // <hp:cellSz> is a declared minimum that real content routinely outgrows
             // without it being kept in sync — one real sample had a 6-line answer
-            // measured at 282 HWPUNIT tall, under half a line, and a 4-column table
-            // had columns narrow enough that neighbouring cells' text overlapped
-            // when drawn at the declared width. The actual extent of the cell's own
-            // text is used instead, for single-row/single-column cells; a spanned
-            // cell's size is left to the rows/columns it spans, not attributed to
-            // just the first one.
+            // measured at 282 HWPUNIT tall, under half a line. A row takes the larger
+            // of what its cells declare and what their content reaches (a spanned
+            // cell's content is left to the rows it spans). Column lines come from
+            // the declared widths (see gridSizes); the content's width is only the
+            // fallback when those don't add up to a grid.
             if (rowSpan == 1) {
                 // Pictures and nested tables count too, not just lines of text.
                 val contentBottom = cellRuns.maxOfOrNull { it.yHu + it.extentHu } ?: 0L
                 rowHeights[row] = maxOf(rowHeights[row] ?: 0L, contentBottom)
             }
+            spans += GridSpan(col, colSpan, tc.child(HP, "cellSz")?.long("width") ?: 0L)
+            rowSpans += GridSpan(row, rowSpan, tc.child(HP, "cellSz")?.long("height") ?: 0L)
             if (colSpan == 1) {
                 val contentRight = cellRuns.maxOfOrNull { el ->
                     el.xHu + when (el) {
@@ -575,12 +578,18 @@ internal object HwpxParser {
         }
         if (rows.isEmpty()) return null
         val maxCol = colCnt
+        val declaredRows = gridSizes(rowSpans.sortedBy { it.start }, rows.size, sz.long("height"))
 
+        // A row is as tall as its cells declare (an empty row has no content to
+        // measure) or its content, whichever is more; the table grows with its rows.
+        val rowsHu = (0 until rows.size).map { r ->
+            maxOf(declaredRows?.get(r) ?: 0L, rowHeights[r] ?: 0L).takeIf { it > 0 } ?: (sz.long("height") / maxOf(rows.size, 1))
+        }
         return HwpxElement.Table(
             xHu = x, yHu = y,
-            widthHu = sz.long("width"), heightHu = sz.long("height"),
-            columnWidthsHu = (0 until maxCol).map { colWidths[it] ?: (sz.long("width") / maxOf(maxCol, 1)) },
-            rowHeightsHu = (0 until rows.size).map { rowHeights[it] ?: (sz.long("height") / maxOf(rows.size, 1)) },
+            widthHu = sz.long("width"), heightHu = maxOf(sz.long("height"), rowsHu.sum()),
+            columnWidthsHu = gridSizes(spans, maxCol, sz.long("width")) ?: (0 until maxCol).map { colWidths[it] ?: (sz.long("width") / maxOf(maxCol, 1)) },
+            rowHeightsHu = rowsHu,
             cells = rows
         )
     }
