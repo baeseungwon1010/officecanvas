@@ -99,6 +99,17 @@ class HwpParserTest {
     }
 
     @Test
+    fun `an equation in a line of text is part of the line`() {
+        val run = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.TextRun>()
+            .single { r -> r.spans.any { it.inline is HwpxElement.Equation } }
+        assertEquals("사다리꼴의 넓이는", run.spans.first().text.trim())
+        val eq = run.spans.last().inline as HwpxElement.Equation
+        assertEquals("{a+b} over {2} TIMES h", eq.script)
+        assertEquals(6000L, run.spans.last().tabHu)
+        assertEquals(70, eq.baselinePercent)
+    }
+
+    @Test
     fun `table cells carry fills, vertical alignment and text`() {
         val table = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.Table>().single()
         assertEquals(2, table.cells.size)
@@ -107,6 +118,8 @@ class HwpParserTest {
         assertEquals(1, first.vAlign)
         assertEquals("형식", first.runs.single().text)
         assertEquals("OLE2 + 레코드", table.cells[1][1]!!.runs.single().text)
+        // That cell leaves its margins (0xFFFF) to the table's: 510 left, 141 top.
+        assertEquals(510L to 141L, table.cells[1][1]!!.runs.single().let { it.xHu to it.yHu })
     }
 
     @Test

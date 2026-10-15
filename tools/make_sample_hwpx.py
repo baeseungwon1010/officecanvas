@@ -7,8 +7,8 @@ one full-width character per 1000 HWPUNIT) instead of a real layout engine.
 
 Page furniture and objects: a header with a tab and the page number field, a
 page number at the bottom center ("- 2 -"), a floating rectangle text box, an
-inline line and a cropped picture; and numbered and bulleted paragraphs at the
-end.
+inline line and a cropped picture; and numbered and bulleted paragraphs and an
+equation in a line of text at the end.
 Run: python3 make_sample_hwpx.py <outdir>"""
 import struct
 import sys
@@ -219,6 +219,14 @@ paras.append(paragraph(layout, "이 샘플은 실제 문서를 대신해 테스�
 # Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
 for text, para_pr in [("첫째 항목", 1), ("세부 항목", 2), ("둘째 항목", 1), ("점 항목", 3)]:
     paras.append(paragraph(layout, text, para_pr=para_pr))
+# An equation set like a character in a line of text.
+EQUATION = "{a+b} over {2} TIMES h"
+equation = ('<hp:equation id="0" zOrder="4" numberingType="EQUATION" textWrap="TOP_AND_BOTTOM" version="Equation Version 60" '
+            'baseLine="70" textColor="#000000" baseUnit="1000" lineMode="CHAR" font="HYhwpEQ">'
+            '<hp:sz width="6000" widthRelTo="ABSOLUTE" height="2400" heightRelTo="ABSOLUTE" protect="0"/>'
+            f'{pos(True)}<hp:script>{escape(EQUATION)}</hp:script></hp:equation>')
+eq_line = paragraph(layout, "사다리꼴의 넓이는 ")
+paras.append(eq_line.replace('</hp:t></hp:run>', '</hp:t>' + equation + '</hp:run>', 1))
 
 section = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            '<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" '

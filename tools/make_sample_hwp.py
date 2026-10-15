@@ -1,11 +1,12 @@
 """Builds sample.hwp: a Hangul 5.0 binary document with the same three pages as
 sample.hwpx (headings, body text, a table), plus what the .hwp tests check
 exactly: a centered bold red title, a table cell with a fill and middle vertical
-alignment, an embedded PNG cropped to its right half, a header line ending in
-a tab and the page number field, a page number at the bottom center ("- 2 -"), a floating
-rectangle text box, an inline line, a paragraph marked as starting a page
-while its line sits at the top like the one before it, and numbered and
-bulleted paragraphs.
+alignment, a cell that leaves its margins to the table, an embedded PNG
+cropped to its right half, a header line ending in a tab and the page number
+field, a page number at the bottom center ("- 2 -"), a floating rectangle text
+box, an inline line, a paragraph marked as starting a page while its line sits
+at the top like the one before it, numbered and bulleted paragraphs, and an
+equation in a line of text.
 
 Every line carries its saved position (PARA_LINE_SEG), computed here with fixed
 metrics the way make_sample_hwpx.py does. The OLE2 container is written by a
@@ -279,7 +280,9 @@ for r, row in enumerate([("형식", "저장 방식"), ("HWP", "OLE2 + 레코드"
         fill_id = 2 if (r, c) == (0, 0) else 1
         flags = (1 << 5) if (r, c) == (0, 0) else 0
         lh = struct.pack("<HHI", 1, 0, flags) + struct.pack("<HHHH", c, r, 1, 1) + struct.pack("<II", col_w, row_h)
-        lh += struct.pack("<HHHH", 510, 510, 141, 141) + struct.pack("<H", fill_id) + struct.pack("<I", col_w)
+        # The last cell leaves its margins to the table's (0xFFFF).
+        margins = (0xFFFF,) * 4 if (r, c) == (1, 1) else (510, 510, 141, 141)
+        lh += struct.pack("<HHHH", *margins) + struct.pack("<H", fill_id) + struct.pack("<I", col_w)
         cells += rec(72, 2, lh) + paragraph(2, None, value, 0, 0, lines_at=[0], width=col_w - 1020)
 tbl_common = struct.pack("<I", 0x74626C20) + struct.pack("<IiiII", 0x1, 0, 0, BODY_W, 2 * row_h) + b"\0" * 22
 table = rec(71, 1, tbl_common) + rec(77, 2, struct.pack("<IHHH", 0, 2, 2, 0) + struct.pack("<HHHH", 510, 510, 141, 141)
@@ -358,6 +361,15 @@ section += paragraph(0, flow, "이 샘플은 실제 문서를 대신해 테스�
 # Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
 for text, shape in [("첫째 항목", 3), ("세부 항목", 4), ("둘째 항목", 3), ("점 항목", 5)]:
     section += paragraph(0, flow, text, 0, shape)
+
+# An equation set like a character in a line of text: a control (treated as a
+# character, 6000 x 2400) with an EQEDIT record: attributes, the script, the base
+# size, color, baseline (percent from the top), version and font.
+EQUATION = "{a+b} over {2} TIMES h"
+eq_body = (struct.pack("<I", 0) + utf16(EQUATION) + struct.pack("<IIh", 1000, 0, 70)
+           + utf16("Equation Version 60") + utf16("HYhwpEQ"))
+eq = rec(71, 1, struct.pack("<I", 0x65716564) + struct.pack("<IiiII", 0x1, 0, 0, 6000, 2400) + b"\0" * 22) + rec(88, 2, eq_body)
+section += paragraph(0, flow, "사다리꼴의 넓이는 ", 0, 0, controls=eq, ctrl_after=ctrl_chars(11))
 
 img = Image.new("RGB", (80, 40), (0xDC, 0x28, 0x28))
 img.paste((0x3A, 0x5B, 0xA0), (40, 0, 80, 40))

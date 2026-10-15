@@ -98,6 +98,31 @@ class HwpxRendererTest {
     }
 
     @Test
+    fun `an equation in a line of text is part of the line`() {
+        val run = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.TextRun>()
+            .single { r -> r.spans.any { it.inline is HwpxElement.Equation } }
+        assertEquals("사다리꼴의 넓이는", run.spans.first().text.trim())
+        val eq = run.spans.last().inline as HwpxElement.Equation
+        assertEquals("{a+b} over {2} TIMES h", eq.script)
+        assertEquals(6000L, run.spans.last().tabHu)
+        assertEquals(70, eq.baselinePercent)
+    }
+
+    @Test
+    fun `equations are typeset with fractions above and below the axis`() {
+        val layout = EquationLayout(0xFF000000.toInt())
+        val plain = layout.layout(EquationParser.parse("a+b"), 100f)
+        val frac = layout.layout(EquationParser.parse("{a+b} over {2}"), 100f)
+        assertTrue("taller above: ${frac.ascent} vs ${plain.ascent}", frac.ascent > plain.ascent * 1.3f)
+        assertTrue("deeper below: ${frac.descent} vs ${plain.descent}", frac.descent > plain.descent * 1.5f)
+        val bitmap = Bitmap.createBitmap(frac.width.toInt() + 10, frac.height.toInt() + 10, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(0xFFFFFFFF.toInt())
+        frac.draw(android.graphics.Canvas(bitmap), 5f, 5f + frac.ascent)
+        val inked = (0 until bitmap.height).count { y -> (0 until bitmap.width).any { x -> bitmap.getPixel(x, y) and 0xFF < 128 } }
+        assertTrue("rows with ink: $inked", inked > frac.height * 0.5f)
+    }
+
+    @Test
     fun `a floating text box sits at its offsets from the paragraph`() {
         val page = doc.pages.indexOfFirst { p -> p.elements.any { it is HwpxElement.Drawing && it.kind == DrawingKind.RECTANGLE } }
         val box = doc.pages[page].elements.filterIsInstance<HwpxElement.Drawing>().single { it.kind == DrawingKind.RECTANGLE }

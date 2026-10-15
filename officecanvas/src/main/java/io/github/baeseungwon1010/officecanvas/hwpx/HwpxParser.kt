@@ -372,6 +372,7 @@ internal object HwpxParser {
                     "tbl" -> parseTable(child, header, depth + 1)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                     "pic" -> parsePicture(child)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                     in SHAPES -> parseDrawing(child, header, depth + 1)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
+                    "equation" -> parseEquation(child)?.positionedBy(child)?.let { inlineAt[text.length] = it; text.append(INLINE_OBJECT_MARKER) }
                     // A page number field (in headers and footers, mostly).
                     "ctrl" -> if (child.children().any { it.localName == "autoNum" && it.getAttribute("numType") == "PAGE" }) {
                         runBoundaries += text.length to style
@@ -405,17 +406,23 @@ internal object HwpxParser {
                 if (el !in st.placedFloating && out.drop(lineFirst).all { it in st.placedFloating }) st.lineStarts += el
                 out += el
             }
+            val hasText = text.substring(start, end).any { it != INLINE_OBJECT_MARKER && !it.isWhitespace() }
+            // Objects set like characters in a line of text go in the line; the
+            // rest (floating, or alone on their line) are placed on their own.
+            val st = state.get()
+            val inLine = if (hasText) (start until end).mapNotNull { o -> inlineAt[o]?.takeIf { it !in st.floatingOf }?.let { o to it } }.toMap() else emptyMap()
             for (offset in start until end) {
                 val obj = inlineAt[offset] ?: continue
+                if (offset in inLine) continue
                 if (offset > runStart) {
-                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last, tabWidths)?.let { emit(withHead(it)) }
+                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last, tabWidths, inLine)?.let { emit(withHead(it)) }
                 }
                 val textFirstLine = firstInList && i == 0 && text.substring(start, end).any { it != INLINE_OBJECT_MARKER && it != PAGE_NUMBER_MARK && !it.isWhitespace() }
                 emit(place(obj, seg.long("horzpos"), seg.long("vertpos"), textFirstLine, seg.long("vertsize")))
                 runStart = offset + 1
             }
             if (runStart < end) {
-                textRunFrom(text, runStart, end, runBoundaries, seg, align, last, tabWidths)?.let { emit(withHead(it)) }
+                textRunFrom(text, runStart, end, runBoundaries, seg, align, last, tabWidths, inLine)?.let { emit(withHead(it)) }
             }
         }
         return out
@@ -425,7 +432,7 @@ internal object HwpxParser {
     private fun textRunFrom(
         text: StringBuilder, start: Int, end: Int,
         runBoundaries: List<Pair<Int, CharStyle>>, seg: DomElement, align: ParaAlign, lastLine: Boolean,
-        tabWidths: Map<Int, Long>
+        tabWidths: Map<Int, Long>, inLine: Map<Int, HwpxElement>
     ): HwpxElement.TextRun? {
         if (text.substring(start, end).isBlank()) return null
         val spans = mutableListOf<Span>()
@@ -438,6 +445,7 @@ internal object HwpxParser {
             for (k in pos..next) {
                 if (k < next && text[k] != INLINE_OBJECT_MARKER) continue
                 if (k > from) spans += spansOf(text.substring(from, k), from, style, tabWidths)
+                if (k < next) inLine[k]?.let { spans += inlineSpan(it, style) }
                 from = k + 1
             }
             pos = next
@@ -540,6 +548,7 @@ internal object HwpxParser {
                         is HwpxElement.Table -> el.widthHu
                         is HwpxElement.ImageEl -> el.widthHu
                         is HwpxElement.Drawing -> el.widthHu
+                        is HwpxElement.Equation -> el.widthHu
                     }
                 } ?: 0L
                 colWidths[col] = maxOf(colWidths[col] ?: 0L, contentRight)
@@ -559,6 +568,18 @@ internal object HwpxParser {
             columnWidthsHu = (0 until maxCol).map { colWidths[it] ?: (sz.long("width") / maxOf(maxCol, 1)) },
             rowHeightsHu = (0 until rows.size).map { rowHeights[it] ?: (sz.long("height") / maxOf(rows.size, 1)) },
             cells = rows
+        )
+    }
+
+    /** <hp:equation>: the script in <hp:script>, its base size, color and baseline. */
+    private fun parseEquation(eq: DomElement): HwpxElement.Equation? {
+        val (w, h) = sizeOf(eq)?.takeIf { it.first > 0 && it.second > 0 } ?: return null
+        val script = eq.child(HP, "script")?.textContent?.takeIf { it.isNotBlank() } ?: return null
+        return HwpxElement.Equation(
+            0, 0, w, h, script,
+            eq.getAttribute("baseUnit").toLongOrNull()?.coerceIn(100, 100_000) ?: 1000,
+            hexColor(eq.getAttribute("textColor")) ?: 0xFF000000.toInt(),
+            eq.getAttribute("baseLine").toIntOrNull()?.coerceIn(0, 100) ?: 85
         )
     }
 

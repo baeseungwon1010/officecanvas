@@ -29,6 +29,7 @@ import io.github.baeseungwon1010.officecanvas.hwpx.extentHu
 import io.github.baeseungwon1010.officecanvas.hwpx.paragraphRelativeY
 import io.github.baeseungwon1010.officecanvas.hwpx.shiftedBy
 import io.github.baeseungwon1010.officecanvas.hwpx.spansOf
+import io.github.baeseungwon1010.officecanvas.hwpx.inlineSpan
 import io.github.baeseungwon1010.officecanvas.hwpx.TableCell
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import io.github.baeseungwon1010.officecanvas.util.Limits
@@ -80,6 +81,8 @@ internal object HwpParser {
     private const val SHAPE_RECTANGLE = TAG_BEGIN + 63
     private const val SHAPE_POLYGON = TAG_BEGIN + 66
     private const val SHAPE_PICTURE = TAG_BEGIN + 69
+    private const val EQEDIT = TAG_BEGIN + 72
+
 
     /** 2x3 affine matrices [a, b, c, d, e, f]: x' = a x + b y + c, y' = d x + e y + f. */
     private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
@@ -550,13 +553,18 @@ internal object HwpParser {
                     }
                     out += el
                 }
+                val hasText = text.substring(start, end).any { it != FILLER && it != OBJECT && !it.isWhitespace() }
+                // Objects set like characters in a line of text go in the line;
+                // the rest (floating, or alone on their line) are placed on their own.
+                val inLine = if (hasText) (start until end).mapNotNull { p -> inlineAt[p]?.takeIf { floatingOf[it] == null }?.let { p to it } }.toMap() else emptyMap()
                 for (pos in start until end) {
                     val obj = inlineAt[pos] ?: continue
-                    textRun(text, runStart, pos, runs, line, align, last, tabWidths)?.let { emit(withHead(it)) }
-                    emit(place(obj, line, firstInList && k == 0 && text.substring(start, end).any { it != FILLER && it != OBJECT && !it.isWhitespace() }))
+                    if (pos in inLine) continue
+                    textRun(text, runStart, pos, runs, line, align, last, tabWidths, inLine)?.let { emit(withHead(it)) }
+                    emit(place(obj, line, firstInList && k == 0 && hasText))
                     runStart = pos + 1
                 }
-                textRun(text, runStart, end, runs, line, align, last, tabWidths)?.let { emit(withHead(it)) }
+                textRun(text, runStart, end, runs, line, align, last, tabWidths, inLine)?.let { emit(withHead(it)) }
             }
             return out
         }
@@ -564,7 +572,7 @@ internal object HwpParser {
         /** The line's text from [start] to [end], split where the character shape changes. */
         private fun textRun(
             text: StringBuilder, start: Int, end: Int, runs: List<Pair<Int, Int>>, line: Line, align: ParaAlign, last: Boolean,
-            tabWidths: Map<Int, Long>
+            tabWidths: Map<Int, Long>, inLine: Map<Int, HwpxElement>
         ): HwpxElement.TextRun? {
             if (end <= start) return null
             val spans = mutableListOf<Span>()
@@ -573,11 +581,13 @@ internal object HwpParser {
                 val idx = runs.indexOfLast { it.first <= pos }.coerceAtLeast(0)
                 val next = (runs.getOrNull(idx + 1)?.first ?: end).coerceIn(pos + 1, end)
                 val style = info.charShape(runs.getOrNull(idx)?.second ?: 0)
-                // Fillers and objects take no room; keep tab offsets by dropping them in place.
+                // Fillers and objects take no room, except objects set in the line;
+                // keep tab offsets by dropping them in place.
                 var from = pos
                 for (k in pos..next) {
                     if (k < next && text[k] != FILLER && text[k] != OBJECT) continue
                     if (k > from) spans += spansOf(text.substring(from, k), from, style, tabWidths)
+                    if (k < next) inLine[k]?.let { spans += inlineSpan(it, style) }
                     from = k + 1
                 }
                 pos = next
@@ -631,6 +641,7 @@ internal object HwpParser {
             val obj = when (ctrl.ctrlId) {
                 "tbl " -> table(ctrl, depth)
                 "gso " -> drawingObject(ctrl, depth)
+                "eqed" -> equation(ctrl)
                 else -> null
             } ?: return null
             // Common object properties: attribute bit 0 = treat as a character.
@@ -729,6 +740,27 @@ internal object HwpParser {
                 lineArgb, lineWidth, fill, content,
                 list?.body?.let { (it.u32(4) ushr 5) and 0x3 } ?: 0
             ))
+        }
+
+        /**
+         * An equation control: the object's size, and an EQEDIT record with
+         * attributes, the script (u16 length, UTF-16), the base font size
+         * (HWPUNIT, 1000 = 10 pt), the color and the baseline (percent of the
+         * height, from the top).
+         */
+        private fun equation(ctrl: Record): HwpxElement.Equation? {
+            val e = ctrl.child(EQEDIT)?.body ?: return null
+            val w = ctrl.body.u32(16).toLong(); val h = ctrl.body.u32(20).toLong()
+            if (w <= 0 || h <= 0) return null
+            val len = e.u16(4)
+            val script = e.utf16(6, len).takeIf { it.isNotBlank() } ?: return null
+            val o = 6 + 2 * len
+            return HwpxElement.Equation(
+                0, 0, w, h, script,
+                e.u32(o).toLong().takeIf { it in 100..100_000 } ?: 1000,
+                colorRefOf(e.u32(o + 4)) ?: 0xFF000000.toInt(),
+                e.i16(o + 8).takeIf { it in 1..100 } ?: 85
+            )
         }
 
         private fun colorRefOf(v: Int): Int? = if (v ushr 24 != 0) null

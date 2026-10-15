@@ -71,7 +71,10 @@ internal object HwpxRenderer {
      * the column width as Hangul does, and squeezing a line that comes out wider
      * than its column in substitute fonts so it can't run into the next cell.
      */
-    private fun drawText(canvas: Canvas, run: HwpxElement.TextRun, offsetXHu: Double, offsetYHu: Double, scale: Double): Long {
+    private fun drawText(
+        canvas: Canvas, run: HwpxElement.TextRun, offsetXHu: Double, offsetYHu: Double, scale: Double,
+        zip: ZipFile? = null, depth: Int = 0
+    ): Long {
         if (run.spans.isEmpty()) return 0
         val paints = run.spans.map { paintFor(it, scale) }
         val widths = run.spans.mapIndexed { i, span -> spanWidth(span, paints[i], scale) }
@@ -106,6 +109,7 @@ internal object HwpxRenderer {
             val paint = paints[i]
             val y = baseline - span.style.script * paint.textSize * 0.4f
             if (span.tabHu != null) {
+                span.inline?.let { drawInline(canvas, it, x, baseline, zip, scale, depth) }
                 x += spanWidth(span, paint, scale)
                 index += span.text.length
                 continue
@@ -191,6 +195,20 @@ internal object HwpxRenderer {
         return (lines.size - 1).coerceAtLeast(0) * pitchHu
     }
 
+    /**
+     * An object in a line at [x] (px) on the line's [baseline] (px): an equation
+     * puts its own baseline there, anything else its bottom.
+     */
+    private fun drawInline(canvas: Canvas, obj: HwpxElement, x: Float, baseline: Float, zip: ZipFile?, scale: Double, depth: Int) {
+        if (depth > Limits.MAX_NESTING) return
+        val base = baseline / scale
+        val top = when (obj) {
+            is HwpxElement.Equation -> base - obj.heightHu * obj.baselinePercent / 100.0
+            else -> base - obj.extentHu
+        }
+        drawElement(canvas, obj.at((x / scale).toLong(), top.toLong()), 0, 0, zip, scale, depth + 1)
+    }
+
     /** A tab takes the width Hangul saved for it; text, its measured width. */
     private fun spanWidth(span: Span, paint: Paint, scale: Double): Float =
         span.tabHu?.let { (it * scale).toFloat() } ?: paint.measureText(span.text)
@@ -238,10 +256,11 @@ internal object HwpxRenderer {
 
     private fun drawElement(canvas: Canvas, el: HwpxElement, dx: Long, dy: Long, zip: ZipFile?, scale: Double, depth: Int) {
         when (el) {
-            is HwpxElement.TextRun -> { drawText(canvas, el, dx.toDouble(), dy.toDouble(), scale) }
+            is HwpxElement.TextRun -> { drawText(canvas, el, dx.toDouble(), dy.toDouble(), scale, zip, depth) }
             is HwpxElement.Table -> if (depth <= Limits.MAX_NESTING) drawTable(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
             is HwpxElement.ImageEl -> drawImage(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale)
             is HwpxElement.Drawing -> if (depth <= Limits.MAX_NESTING) drawDrawing(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
+            is HwpxElement.Equation -> drawEquation(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), scale)
         }
     }
 
@@ -281,7 +300,7 @@ internal object HwpxRenderer {
             // Lines broken here (see drawWrapped) push the rest of the cell down.
             var pushed = 0L
             for (el in p.cell.elements.sortedBy { it.yHu }) {
-                if (el is HwpxElement.TextRun) pushed += drawText(canvas, el, p.left.toDouble(), (p.top + dy + pushed).toDouble(), scale)
+                if (el is HwpxElement.TextRun) pushed += drawText(canvas, el, p.left.toDouble(), (p.top + dy + pushed).toDouble(), scale, zip, depth + 1)
                 else drawElement(canvas, el, p.left, p.top + dy + pushed, zip, scale, depth + 1)
             }
         }
@@ -330,6 +349,25 @@ internal object HwpxRenderer {
         val room = (d.heightHu - bottom).coerceAtLeast(0)
         val dy = when (d.contentVAlign) { 1 -> room / 2; 2 -> room; else -> 0L }
         for (el in d.content) drawElement(canvas, el, d.xHu, d.yHu + dy, zip, scale, depth + 1)
+    }
+
+    /**
+     * Typesets the equation at its base size and fits it to the box Hangul saved
+     * (Hangul's own metrics differ a little), with the baseline where Hangul put it.
+     */
+    private fun drawEquation(canvas: Canvas, eq: HwpxElement.Equation, scale: Double) {
+        val boxW = (eq.widthHu * scale).toFloat()
+        val boxH = (eq.heightHu * scale).toFloat()
+        if (boxW < 1f || boxH < 1f) return
+        val laid = EquationLayout(eq.colorArgb).layout(EquationParser.parse(eq.script), (eq.sizeHu * scale).toFloat())
+        if (laid.width <= 0f || laid.height <= 0f) return
+        val k = minOf(boxW / laid.width, boxH / laid.height, 1.25f).coerceAtLeast(0.2f)
+        val baseline = ((eq.yHu * scale) + boxH * eq.baselinePercent / 100f).toFloat()
+        canvas.save()
+        canvas.translate((eq.xHu * scale).toFloat() + (boxW - laid.width * k) / 2, baseline)
+        canvas.scale(k, k)
+        laid.draw(canvas, 0f, 0f)
+        canvas.restore()
     }
 
     private fun drawImage(canvas: Canvas, image: HwpxElement.ImageEl, zip: ZipFile?, scale: Double) {

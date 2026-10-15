@@ -58,8 +58,10 @@ internal data class CharStyle(
 
 /** A stretch of a line in one character style. */
 /** Styled text; a tab is a span of its own ("\t") with the width Hangul gave
- *  it ([tabHu]), since both formats save each tab's resulting width. */
-internal data class Span(val text: String, val style: CharStyle, val tabHu: Long? = null)
+ *  it ([tabHu]), since both formats save each tab's resulting width. An object
+ *  set in the line like a character (an equation, a small picture) is a span
+ *  too, [inline], taking its own width. */
+internal data class Span(val text: String, val style: CharStyle, val tabHu: Long? = null, val inline: HwpxElement? = null)
 
 /** [piece] (which starts at [start] in its paragraph) as spans, each tab on its own
  *  with its saved width from [tabWidths] (by paragraph offset). */
@@ -160,6 +162,22 @@ internal sealed class HwpxElement {
         val content: List<HwpxElement> = emptyList(),
         val contentVAlign: Int = 0
     ) : HwpxElement()
+
+    /**
+     * An equation: Hangul's equation script, typeset again into the box Hangul
+     * saved for it. [sizeHu] is the base font size (1000 = 10 pt) and
+     * [baselinePercent] where the baseline sits, from the box's top.
+     */
+    data class Equation(
+        override val xHu: Long,
+        override val yHu: Long,
+        val widthHu: Long,
+        val heightHu: Long,
+        val script: String,
+        val sizeHu: Long = 1000,
+        val colorArgb: Int = 0xFF000000.toInt(),
+        val baselinePercent: Int = 85
+    ) : HwpxElement()
 }
 
 internal data class ImageCrop(val left: Float, val top: Float, val right: Float, val bottom: Float) {
@@ -197,7 +215,24 @@ internal val HwpxElement.extentHu: Long
         is HwpxElement.Table -> heightHu
         is HwpxElement.ImageEl -> heightHu
         is HwpxElement.Drawing -> heightHu
+        is HwpxElement.Equation -> heightHu
     }
+
+/** How wide an element is. */
+internal val HwpxElement.widthHu: Long
+    get() = when (this) {
+        is HwpxElement.TextRun -> widthHu
+        is HwpxElement.Table -> widthHu
+        is HwpxElement.ImageEl -> widthHu
+        is HwpxElement.Drawing -> widthHu
+        is HwpxElement.Equation -> widthHu
+    }
+
+/** [obj] as a span of a line of text. */
+internal fun inlineSpan(obj: HwpxElement, style: CharStyle) = Span(INLINE_OBJECT, style, obj.widthHu.coerceIn(0, 1_000_000), obj)
+
+/** Stands for an object in a line's text. */
+internal const val INLINE_OBJECT = "\uFFFC"
 
 /** The element moved to ([x], [y]). */
 internal fun HwpxElement.at(x: Long, y: Long): HwpxElement = when (this) {
@@ -205,4 +240,5 @@ internal fun HwpxElement.at(x: Long, y: Long): HwpxElement = when (this) {
     is HwpxElement.Table -> copy(xHu = x, yHu = y)
     is HwpxElement.ImageEl -> copy(xHu = x, yHu = y)
     is HwpxElement.Drawing -> copy(xHu = x, yHu = y)
+    is HwpxElement.Equation -> copy(xHu = x, yHu = y)
 }
