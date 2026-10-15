@@ -105,11 +105,13 @@ Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, 3
 | Paragraph numbers, outline numbers and bullets | ✓ | ✓ |
 | Fonts | serif or sans-serif chosen from the face name; Latin text in the bundled metric-compatible fonts | same |
 | Tables: cell borders, fills, vertical alignment, nested tables | ✓ | ✓ (gradient fills as their average color) |
-| Tables continued across pages | ✓ | ✓ |
+| Tables continued across pages, rows taller than a page cut between their lines | ✓ | ✓ |
+| Equations (Hangul's equation scripts, typeset again into their saved box) | ✓ | ✓ |
+| Objects set like characters in a line of text | ✓ | ✓ |
 | Pictures | inline and floating; crop | same |
 | Headers and footers (odd/even pages, changing mid-section), page numbers and the page number field | ✓ | ✓ |
 | Drawing objects: lines, rectangles, ellipses, polygons, groups, text boxes | ✓ (arcs and curves through their points) | ✓ |
-| Footnotes, equations, charts, multiple columns | — | — |
+| Footnotes, charts, multiple columns | — | — |
 
 ## Fonts
 
