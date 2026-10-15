@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.baeseungwon1010.officecanvas.sample"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.5.2"
+        versionCode = 9
+        versionName = "0.5.3"
     }
 
     compileOptions {
