@@ -898,10 +898,19 @@ internal object HwpParser {
             // row whose content runs well past that (over pages, or a cell declared
             // smaller than its own margins) takes the content's.
             val stretch = (declared.toDouble() / declaredRows.sum().coerceAtLeast(1)).coerceAtLeast(1.0)
-            val rowsHu = declaredRows.mapIndexed { r, h ->
-                val shown = (h * stretch).toLong()
-                val content = contentHeights[r] ?: 0L
-                if (content > shown + 2000) content else shown
+            val shown = declaredRows.map { (it * stretch).toLong() }
+            val grown = shown.indices.filter { (contentHeights[it] ?: 0L) > shown[it] + 2000 }.toSet()
+            var rowsHu = shown.mapIndexed { r, h -> if (r in grown) contentHeights[r]!! else h }
+            // When everything still fits the table's own height (the height Hangul
+            // laid the text after it out with), the other rows give up their
+            // stretch, down to their content, to keep it.
+            val need = shown.indices.map { r -> if (r in grown) rowsHu[r] else maxOf(declaredRows[r], contentHeights[r] ?: 0L) }
+            if (grown.isNotEmpty() && rowsHu.sum() > declared && need.sum() <= declared) {
+                val room = declared - grown.sumOf { rowsHu[it] }
+                fun fitted(f: Double) = rowsHu.indices.map { r -> if (r in grown) rowsHu[r] else maxOf(need[r], (shown[r] * f).toLong()) }
+                var lo = 0.0; var hi = 1.0
+                repeat(30) { val mid = (lo + hi) / 2; if (fitted(mid).sum() - grown.sumOf { rowsHu[it] } > room) hi = mid else lo = mid }
+                rowsHu = fitted(lo)
             }
             return HwpxElement.Table(
                 xHu = 0, yHu = 0, widthHu = width, heightHu = maxOf(declared, rowsHu.sum()),
