@@ -549,7 +549,8 @@ internal class DrawingReader(
             // Titles are never shrunk (5.45's title starts with a blank line and would
             // otherwise drop to half size; LibreOffice lets it extend past the box instead).
             autoFit = placeholder && !isTitle(records),
-            autoFitFloor = 0.5f
+            autoFitFloor = 0.4f,
+            estimateFit = true
         )
     }
 

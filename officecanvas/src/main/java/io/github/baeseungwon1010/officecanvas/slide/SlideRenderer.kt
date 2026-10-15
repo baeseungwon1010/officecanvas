@@ -42,6 +42,9 @@ internal object SlideRenderer {
     /** Test hook: when set, every drawn text line's (start of text, baseline y px) is appended. */
     var debugBaselines: MutableList<Pair<String, Float>>? = null
 
+    /** For tests: the (text scale, line spacing reduction) auto-fit chose per text body. */
+    var debugFit: MutableList<Pair<Float, Float>>? = null
+
     /**
      * Renders every slide at [targetLongSidePx] on its longer edge, one at a time,
      * via [onSlide]. A deck's slides are rendered here, not collected into a
@@ -570,8 +573,14 @@ internal object SlideRenderer {
         var laid: List<LaidParagraph>
         var totalHeight: Float
         var shrink = 1f
+        var step = 0
         do {
-            laid = body.paragraphs.mapIndexed { i, p -> layParagraph(p, i == 0, width, scale, shrink) }
+            // PowerPoint's own steps (see TextBody.estimateFit): the line spacing
+            // reduction goes 0, 10, 20% at each text scale.
+            val reduction = if (body.estimateFit) (step % 3) * 10f else 0f
+            laid = body.paragraphs.mapIndexed { i, p ->
+                layParagraph(if (reduction > 0f) p.copy(lineSpacingPercent = (p.lineSpacingPercent - reduction).coerceAtLeast(10f)) else p, i == 0, width, scale, shrink)
+            }
             totalHeight = laid.sumOf { (it.before + it.layout.height + it.after).toDouble() }.toFloat()
             // Trailing blank paragraphs (often left to make room for a picture) don't
             // count toward overflow, so they can't force the real text to shrink.
@@ -580,8 +589,16 @@ internal object SlideRenderer {
             // Small steps: overflowing by a line shouldn't cost 15% of the text size.
             // A pixel or so of overflow is rounding, not overflow (a one-line title at
             // exactly 1.2 x its size lands a hair past its box in PowerPoint too).
-            if (body.autoFit && fitHeight > availableHeight + 1.5f && shrink - 0.05f >= body.autoFitFloor) shrink -= 0.05f else break
+            if (!body.autoFit || fitHeight <= availableHeight + 1.5f) break
+            if (body.estimateFit) {
+                val next = step + 1
+                val nextShrink = 1f - (next / 3) * 0.075f
+                if (nextShrink < body.autoFitFloor - 0.001f) break
+                step = next
+                shrink = nextShrink
+            } else if (shrink - 0.05f >= body.autoFitFloor) shrink -= 0.05f else break
         } while (true)
+        debugFit?.add(shrink to if (body.estimateFit) (step % 3) * 10f else 0f)
 
         var y = innerTop + when (body.anchor) {
             VAnchor.TOP -> 0f

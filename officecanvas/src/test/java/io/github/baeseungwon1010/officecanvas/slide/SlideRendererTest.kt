@@ -127,6 +127,36 @@ class SlideRendererTest {
     }
 
     @Test
+    fun `text estimated to overflow shrinks in PowerPoint's steps`() {
+        // Ten 20pt lines, 24pt apart at single spacing: 240pt, in a box 230pt
+        // tall. Reducing the line spacing by 10% (216pt) is the first step that
+        // fits, before any smaller text; 200pt needs 20% (192pt); 181pt needs
+        // the text at 92.5% as well (222, 199.8 and then 177.6pt at 0, 10 and
+        // 20% less spacing).
+        fun chosen(heightPt: Double): Pair<Float, Float> {
+            val body = TextBody(
+                (1..10).map { Paragraph(listOf(Run("line $it", sizePt = 20f))) },
+                insetLeftEmu = 0, insetTopEmu = 0, insetRightEmu = 0, insetBottomEmu = 0,
+                autoFit = true, autoFitFloor = 0.4f, estimateFit = true
+            )
+            val shape = Element.Shape(Box(0, 0, 4 * EMU_PER_INCH.toLong(), (heightPt * EMU_PER_POINT).toLong()), null, null, null, 0, body)
+            val deck = Deck(10 * EMU_PER_INCH.toLong(), (7.5 * EMU_PER_INCH).toLong(), listOf(Slide(null, listOf(shape))))
+            val fits = mutableListOf<Pair<Float, Float>>()
+            SlideRenderer.debugFit = fits
+            try {
+                SlideRenderer.render(deck, File("unused"), targetLongSidePx = 1000) { _, bmp -> bmp.recycle() }
+            } finally {
+                SlideRenderer.debugFit = null
+            }
+            return fits.single()
+        }
+        org.junit.Assert.assertEquals(1f to 0f, chosen(250.0))
+        org.junit.Assert.assertEquals(1f to 10f, chosen(230.0))
+        org.junit.Assert.assertEquals(1f to 20f, chosen(200.0))
+        org.junit.Assert.assertEquals(0.925f to 20f, chosen(181.0))
+    }
+
+    @Test
     fun `Korean text wraps between words, not syllables`() {
         val words = listOf("유사도는", "높지만", "생성된", "지", "육개월이", "넘은", "오래된", "패키지인", "경우")
         val body = TextBody(listOf(Paragraph(listOf(Run(words.joinToString(" "), sizePt = 24f)))))

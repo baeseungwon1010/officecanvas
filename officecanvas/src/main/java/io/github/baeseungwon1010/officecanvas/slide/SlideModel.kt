@@ -146,6 +146,10 @@ internal data class TextBody(
     val autoFit: Boolean = false,
     /** The smallest scale auto-fit may shrink the text to. */
     val autoFitFloor: Float = 0.45f,
+    /** Auto-fit is to be worked out as PowerPoint does it (nothing was saved, as in
+     *  a .ppt): text scale in 7.5% steps, and at each a line spacing reduction of
+     *  0, 10 or 20%, the first pair that fits. Otherwise small corrections only. */
+    val estimateFit: Boolean = false,
     /** False when lines run on past the box instead of wrapping (wrap="none"). */
     val wrap: Boolean = true
 )

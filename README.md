@@ -80,7 +80,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Automatic numbering (1. a. i. …) | ✓ | ✓ |
 | Superscript / subscript | ✓ | ✓ |
 | Text highlight | ✓ | — |
-| Shrink text on overflow | the scale PowerPoint saved | estimated |
+| Shrink text on overflow | the scale PowerPoint saved | estimated in PowerPoint's own steps |
 | Shape fill and outline | ✓ | ✓ |
 | Lines, connectors, arrowheads, flipped shapes | ✓ (straight, elbow, curved) | ✓ |
 | Shape outlines | ~65 presets + freeforms | freeforms + common presets |
