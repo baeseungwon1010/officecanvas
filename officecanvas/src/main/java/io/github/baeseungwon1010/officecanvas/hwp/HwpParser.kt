@@ -914,7 +914,9 @@ internal object HwpParser {
             // smaller than its own margins) takes the content's.
             val stretch = (declared.toDouble() / declaredRows.sum().coerceAtLeast(1)).coerceAtLeast(1.0)
             val shown = declaredRows.map { (it * stretch).toLong() }
-            val grown = shown.indices.filter { (contentHeights[it] ?: 0L) > shown[it] + 2000 }.toSet()
+            // "Well past": by a couple of lines, or to over twice the height (a nested
+            // table declared 282 for each row of a 1282-tall line).
+            val grown = shown.indices.filter { (contentHeights[it] ?: 0L).let { c -> c > shown[it] + 2000 || c > shown[it] * 2 } }.toSet()
             var rowsHu = shown.mapIndexed { r, h -> if (r in grown) contentHeights[r]!! else h }
             // When everything still fits the table's own height (the height Hangul
             // laid the text after it out with), the other rows give up their
