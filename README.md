@@ -86,6 +86,8 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Shape outlines | ~65 presets + freeforms | freeforms + common presets |
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular |
 | Outer shadows | ✓ (shapes and pictures, incl. theme effect styles) | — |
+| Groups turned and flipped, group fill | ✓ | as the shapes PowerPoint stores |
+| 3-D rotation and extrusion | approximated: the shape drawn into its turned plane, the extrusion swept behind it | — |
 | Tables | ✓ incl. table styles; rows grow to fit their text | as the shapes PowerPoint stores |
 | SmartArt | from the drawing PowerPoint saves with it | — |
 | Charts | bar and column (clustered, stacked, 100%), line, area, pie, doughnut, from the values cached in the chart part; title, legend, axis and value labels | — |
@@ -93,7 +95,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Slide background | solid, gradient, picture | solid, picture, gradient |
 | Hidden slides | skipped | skipped, as PowerPoint's own export does |
 
-Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, 3-D effects, text shadows, animations, video, embedded OLE objects other than their preview picture.
+Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, bevels and 3-D lighting, text shadows, animations, video, embedded OLE objects other than their preview picture.
 
 ### Hangul documents
 
@@ -119,7 +121,7 @@ Office documents are mostly set in Calibri, Arial, Times New Roman and Courier N
 
 ## How close is it
 
-Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.9; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D effects. For `.ppt`, on a 75-slide lecture deck, 66 slides have every text baseline within 6 pt of LibreOffice's. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
+Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.8; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D perspective. For `.ppt`, on a 75-slide lecture deck, 66 slides have every text baseline within 6 pt of LibreOffice's. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
 
 LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice disagree (symbol fonts, automatic numbering), the renderer follows PowerPoint.
 
