@@ -107,6 +107,22 @@ class SlideRendererTest {
         org.junit.Assert.assertTrue("highlight pixels: $amber", amber > 50)
     }
 
+    @Test
+    fun `table rows grow to fit their text`() {
+        val file = sample("pptx_features.pptx")
+        val deck = PptxParser.parse(file)
+        var slide: Bitmap? = null
+        // 10in wide at 1000px: 100px per inch.
+        SlideRenderer.render(deck.copy(slides = listOf(deck.slides[6])), file, targetLongSidePx = 1000) { _, bmp -> slide = bmp }
+        val bmp = slide!!
+        savePng(bmp, "pptx_features_table_rows.png")
+        // The rows are saved 0.1in tall at 4.5in; the first holds three 18pt lines,
+        // so "below" in the second row is drawn under them (about 5.6in), not
+        // over them at 4.6in.
+        fun inked(y0: Int, y1: Int) = (y0 until y1).any { y -> (100 until 300).any { x -> bmp.getPixel(x, y) and 0xFF < 100 } }
+        org.junit.Assert.assertTrue("text under the first row's", inked(552, 590))
+    }
+
     private fun sampleDistinctColors(bmp: Bitmap): Int {
         val seen = HashSet<Int>()
         val stepX = maxOf(1, bmp.width / 60)

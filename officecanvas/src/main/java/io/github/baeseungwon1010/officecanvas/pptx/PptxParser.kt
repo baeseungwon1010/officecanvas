@@ -395,7 +395,9 @@ internal object PptxParser {
         val grid = tbl.child(NS_A, "tblGrid")?.all(NS_A, "gridCol")?.map { it.long("w") } ?: return null
         val tblPr = tbl.child(NS_A, "tblPr")
         val styleId = tblPr?.child(NS_A, "tableStyleId")?.textContent?.trim()
-        val style = styleId?.let { ctx.tableStyles[it] } ?: if (styleId == null || styleId == DEFAULT_TABLE_STYLE) defaultTableStyle() else null
+        // No style id means no style (tableStyles.xml's "def" is only what new
+        // tables get); the default style is built in for when it's named but not stored.
+        val style = styleId?.let { ctx.tableStyles[it] ?: if (it == DEFAULT_TABLE_STYLE) defaultTableStyle() else null }
         fun flag(name: String) = tblPr?.getAttribute(name) == "1"
         val rowsXml = tbl.all(NS_A, "tr")
         val lastRow = rowsXml.size - 1

@@ -410,15 +410,27 @@ internal object SlideRenderer {
         val totalW = table.columnWidthsEmu.sum().coerceAtLeast(1)
         val colXEmu = table.columnWidthsEmu.runningFold(0L) { acc, w -> acc + w }
         val totalH = table.rowHeightsEmu.sum().coerceAtLeast(1)
-        val rowYEmu = table.rowHeightsEmu.runningFold(0L) { acc, h -> acc + h }
 
         // Column widths are relative to the table's own box, not absolute slide
         // coordinates, so they are rescaled to fill the box exactly regardless of
         // rounding drift between the declared grid and the frame's own extent.
         val wScale = table.box.w.toDouble() / totalW
-        val hScale = table.box.h.toDouble() / totalH
+        // Row heights are minimums: a frame saved shorter than they add up to
+        // doesn't squeeze them (a taller one stretches them, as PowerPoint saved it).
+        val hScale = (table.box.h.toDouble() / totalH).coerceAtLeast(1.0)
         fun colX(i: Int) = table.box.x + (colXEmu[i] * wScale).toLong()
-        fun rowY(i: Int) = table.box.y + (rowYEmu[i] * hScale).toLong()
+        // A row's height is a minimum: PowerPoint grows it to fit its cells' text.
+        val rowPx = table.rowHeightsEmu.map { (it * hScale * scale).toFloat() }.toMutableList()
+        for (r in table.cells.indices) for (c in table.cells[r].indices) {
+            val cell = table.cells[r][c] ?: continue
+            if (cell.rowSpan != 1) continue
+            // An empty cell keeps the row's own height.
+            val text = cell.text?.takeIf { t -> t.paragraphs.any { !it.isEmpty } } ?: continue
+            val w = ((colX((c + cell.colSpan).coerceAtMost(table.columnWidthsEmu.size)) - colX(c)) * scale).toFloat()
+            rowPx[r] = maxOf(rowPx[r], textHeight(text, w, scale))
+        }
+        val rowTop = rowPx.runningFold((table.box.y * scale).toFloat()) { acc, h -> acc + h }
+        fun rowY(i: Int) = (rowTop[i] / scale).toLong()
 
         val gridPaint = table.gridArgb?.let { argb ->
             Paint(Paint.ANTI_ALIAS_FLAG).apply { color = argb; style = Paint.Style.STROKE; strokeWidth = 1.5f }
@@ -439,6 +451,15 @@ internal object SlideRenderer {
                 cell.text?.let { drawText(canvas, it, rect, scale, 0f) }
             }
         }
+    }
+
+    /** How tall [body] sets in a box [widthPx] wide, insets included. */
+    private fun textHeight(body: TextBody, widthPx: Float, scale: Double): Float {
+        val width = (widthPx - ((body.insetLeftEmu + body.insetRightEmu) * scale).toFloat()).toInt()
+        if (width <= 1) return 0f
+        val text = body.paragraphs.mapIndexed { i, p -> layParagraph(p, i == 0, width, scale, 1f) }
+            .sumOf { (it.before + it.layout.height + it.after).toDouble() }.toFloat()
+        return text + ((body.insetTopEmu + body.insetBottomEmu) * scale).toFloat()
     }
 
     private fun drawText(canvas: Canvas, body: TextBody, box: RectF, scale: Double, rotation: Float) {

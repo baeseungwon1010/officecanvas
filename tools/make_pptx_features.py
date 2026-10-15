@@ -12,7 +12,8 @@ tests check exactly (PptxParserTest, SlideRendererTest).
      shrank to 50% (normAutofit fontScale), a slide-number field
   6. pictures: a cropped PNG, an SVG-only icon, a picture inside
      mc:AlternateContent's fallback
-  7. a table in PowerPoint's default style (stored by id only)
+  7. a table in PowerPoint's default style (stored by id only), and one with no
+     style whose rows are saved shorter than their text
   8. effects: a hard outer shadow, an empty effect list overriding the style's
      theme shadow, white text on a highlight
   9. a hidden slide (skipped)
@@ -148,6 +149,23 @@ table = s.shapes.add_table(3, 2, Inches(1), Inches(1), Inches(8), Inches(3)).tab
 for r in range(3):
     for c in range(2):
         table.cell(r, c).text = f"r{r}c{c}"
+# A table with no style id (no style at all) whose rows are saved far shorter
+# than their text: PowerPoint grows them to fit.
+plain = s.shapes.add_table(2, 1, Inches(1), Inches(4.5), Inches(4), Inches(0.2)).table
+tblPr = plain._tbl.tblPr
+for child in list(tblPr):
+    tblPr.remove(child)
+for attr in list(tblPr.attrib):
+    del tblPr.attrib[attr]
+for row in plain.rows:
+    row.height = Emu(91440)
+plain.cell(0, 0).text = "one\ntwo\nthree"
+plain.cell(1, 0).text = "below"
+for cell in (plain.cell(0, 0), plain.cell(1, 0)):
+    for p in cell.text_frame.paragraphs:
+        for run in p.runs:
+            run.font.size = Pt(18)
+            run.font.color.rgb = RGBColor(0, 0, 0)
 
 # 8: effects: an explicit hard shadow down and to the right, an empty effect list
 # (no shadow, despite the style's effect reference), highlighted text

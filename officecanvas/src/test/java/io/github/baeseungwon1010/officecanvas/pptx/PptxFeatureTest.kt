@@ -54,6 +54,12 @@ class PptxFeatureTest {
     }
 
     @Test
+    fun `a table with no style id has no style`() {
+        val plain = deck.slides[6].elements.filterIsInstance<Element.Table>().single { it.cells.size == 2 && it.cells[0].size == 1 }
+        assertTrue(plain.cells.flatten().all { it?.fillArgb == null })
+    }
+
+    @Test
     fun `highlighted runs keep their highlight color`() {
         val run = shapes(7).mapNotNull { it.text }.flatMap { it.paragraphs }.flatMap { it.runs }.single { it.text == "highlighted" }
         assertEquals(0xFFFFC000.toInt(), run.highlightArgb)
@@ -129,7 +135,7 @@ class PptxFeatureTest {
 
     @Test
     fun `tables in the default style get its header and band fills`() {
-        val table = deck.slides[6].elements.filterIsInstance<Element.Table>().single()
+        val table = deck.slides[6].elements.filterIsInstance<Element.Table>().first()
         val header = table.cells[0][0]!!
         assertEquals(0xFF4F81BD.toInt(), header.fillArgb)
         val headerRun = header.text!!.paragraphs[0].runs[0]
