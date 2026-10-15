@@ -508,8 +508,10 @@ internal object SlideRenderer {
 
         var y = innerTop + when (body.anchor) {
             VAnchor.TOP -> 0f
-            VAnchor.MIDDLE -> ((availableHeight - totalHeight) / 2f).coerceAtLeast(0f)
-            VAnchor.BOTTOM -> (availableHeight - totalHeight).coerceAtLeast(0f)
+            // Text taller than its box overflows both ways when centered, upward
+            // when anchored at the bottom, as PowerPoint draws it.
+            VAnchor.MIDDLE -> (availableHeight - totalHeight) / 2f
+            VAnchor.BOTTOM -> availableHeight - totalHeight
         }
 
         canvas.withRotation(rotation, box) {
