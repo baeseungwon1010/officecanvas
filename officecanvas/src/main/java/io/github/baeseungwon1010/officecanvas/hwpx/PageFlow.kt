@@ -120,6 +120,15 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         settlePending(y)
     }
 
+    /** Starts a new page unless the current one is still empty. */
+    fun breakPage() {
+        if (pages.last().isNotEmpty()) newPage()
+    }
+
+    /** Bottom of the last table (or table piece) placed, on the current page when
+     *  the table ran over pages. */
+    val lastTableBottom: Long get() = tableEnd
+
     /** The page being filled (0-based, counting pages that may end up empty). */
     val page: Int get() = pages.size - 1
 

@@ -342,6 +342,46 @@ class MaliciousInputTest {
         assertEquals("r", SafeXml.parse("<r/>".toByteArray())!!.documentElement.tagName)
     }
 
+    // ---- HWPML (.hwp saved as XML) -------------------------------------------
+
+    private fun hwpml(body: String, head: String = "") = File.createTempFile("evil", ".hwp").apply {
+        deleteOnExit()
+        writeText("""<?xml version="1.0" encoding="UTF-8"?><HWPML Version="2.8"><HEAD>$head</HEAD><BODY><SECTION Id="0">$body</SECTION></BODY></HWPML>""")
+    }
+
+    @Test
+    fun `an HWPML file with a DOCTYPE is refused`() {
+        val secret = File.createTempFile("secret", ".txt").apply { writeText("TOPSECRET"); deleteOnExit() }
+        val file = File.createTempFile("evil", ".hwp").apply {
+            deleteOnExit()
+            writeText("""<?xml version="1.0"?><!DOCTYPE HWPML [<!ENTITY x SYSTEM "file://${secret.absolutePath}">]><HWPML><BODY><SECTION><P><TEXT><CHAR>&x;</CHAR></TEXT></P></SECTION></BODY></HWPML>""")
+        }
+        assertTrue(survives { render(file) } is OfficeCanvasException)
+    }
+
+    @Test
+    fun `an HWPML table declaring fifty thousand rows and columns`() {
+        val file = hwpml("""<P><TEXT><TABLE RowCount="50000" ColCount="50000"><ROW><CELL ColAddr="0" RowAddr="0" Width="1000" Height="1000"><PARALIST><P><TEXT><CHAR>x</CHAR></TEXT></P></PARALIST></CELL></ROW></TABLE></TEXT></P>""")
+        survives(10) { render(file) }
+    }
+
+    @Test
+    fun `an HWPML paragraph of two million characters and absurd sizes`() {
+        val head = """<MAPPINGTABLE><CHARSHAPELIST><CHARSHAPE Id="0" Height="2000000000"><RATIO Hangul="-5"/><CHARSPACING Hangul="99999"/></CHARSHAPE></CHARSHAPELIST><PARASHAPELIST><PARASHAPE Id="0"><PARAMARGIN Indent="-2000000000" Left="2000000000" LineSpacingType="Fixed" LineSpacing="0"/></PARASHAPE></PARASHAPELIST></MAPPINGTABLE>"""
+        val file = hwpml("""<P ParaShape="0"><TEXT CharShape="0"><CHAR>${"가".repeat(2_000_000)}</CHAR></TEXT></P>""", head)
+        var pages = 0
+        survives(120) { pages = render(file, longSide = 32) }
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
+    @Test
+    fun `an HWPML section breaking the page on every paragraph stops at the page limit`() {
+        val file = hwpml((0 until 3000).joinToString("") { """<P PageBreak="true"><TEXT><CHAR>x</CHAR></TEXT></P>""" })
+        var pages = 0
+        survives(60) { pages = render(file, longSide = 32) }
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
     // ---- .hwp records -------------------------------------------------------
 
     private fun hwpRec(tag: Int, level: Int, payload: ByteArray): ByteArray {

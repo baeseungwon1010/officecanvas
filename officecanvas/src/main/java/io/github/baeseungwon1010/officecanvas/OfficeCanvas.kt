@@ -3,6 +3,7 @@ package io.github.baeseungwon1010.officecanvas
 import android.content.Context
 import android.graphics.Bitmap
 import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
+import io.github.baeseungwon1010.officecanvas.hwp.HwpmlParser
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxParser
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxRenderer
 import io.github.baeseungwon1010.officecanvas.ppt.PptParser
@@ -71,7 +72,9 @@ object OfficeCanvas {
                     SlideRenderer.render(deck, file, longSidePx, counting)
                 }
                 DocumentFormat.HWPX -> HwpxRenderer.render(HwpxParser.parse(file), file, longSidePx, counting)
-                DocumentFormat.HWP -> HwpxRenderer.render(HwpParser.parse(file), file, longSidePx, counting)
+                DocumentFormat.HWP -> HwpxRenderer.render(
+                    if (HwpmlParser.isHwpml(file)) HwpmlParser.parse(file) else HwpParser.parse(file), file, longSidePx, counting
+                )
             }
         } catch (e: OfficeCanvasException) {
             throw e

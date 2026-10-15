@@ -1,6 +1,7 @@
 package io.github.baeseungwon1010.officecanvas
 
 import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
+import io.github.baeseungwon1010.officecanvas.hwp.HwpmlParser
 import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
 import java.io.File
 import java.util.zip.ZipFile
@@ -16,7 +17,8 @@ enum class DocumentFormat {
     /** Hangul (OWPML, .hwpx): a zip of XML parts with the layout Hangul saved. */
     HWPX,
 
-    /** Hangul 5.0 (.hwp): binary records in an OLE2 compound file. */
+    /** Hangul (.hwp): HWP 5.0 binary records in an OLE2 compound file, or the
+     *  older HWPML XML some systems still save .hwp files as. */
     HWP;
 
     companion object {
@@ -34,6 +36,7 @@ enum class DocumentFormat {
             return when {
                 head.startsWith(ZIP_MAGIC) -> detectZip(file)
                 read == 8 && head.startsWith(OLE2_MAGIC) -> detectOle2(file)
+                HwpmlParser.isHwpml(file) -> HWP
                 else -> null
             }
         }

@@ -209,6 +209,13 @@ internal object HwpxRenderer {
         drawElement(canvas, obj.at((x / scale).toLong(), top.toLong()), 0, 0, zip, scale, depth + 1)
     }
 
+    /** [span]'s width in HWPUNIT as [drawText] draws it (the same face, size,
+     *  width ratio and spacing): for laying out text no layout was saved for. */
+    internal fun widthHu(span: Span): Float = spanWidth(span, paintFor(span, MEASURE_SCALE), MEASURE_SCALE) / MEASURE_SCALE.toFloat()
+
+    /** Large enough for exact widths, small enough that sizes stay within Paint's range. */
+    private const val MEASURE_SCALE = 0.1
+
     /** A tab takes the width Hangul saved for it; text, its measured width. */
     private fun spanWidth(span: Span, paint: Paint, scale: Double): Float =
         span.tabHu?.let { (it * scale).toFloat() } ?: paint.measureText(span.text)
