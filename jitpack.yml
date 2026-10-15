@@ -1,4 +1,7 @@
 jdk:
   - openjdk17
 install:
+  # The Gradle distribution comes from GitHub, which sometimes fails a download;
+  # fetch it with a few retries before building.
+  - for i in 1 2 3 4 5; do ./gradlew --version && break; sleep 15; done
   - ./gradlew :officecanvas:publishToMavenLocal -x test
