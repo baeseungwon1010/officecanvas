@@ -171,13 +171,28 @@ internal class BlipStore(private val read: ((offset: Long, length: Int) -> ByteA
             RT.BLIP_WMF -> PictureData.Kind.WMF
             else -> return null
         }
-        return Blip(PictureData(kind) {
-            try {
-                read(offset, 8 + length)?.let { extract(RecordReader(it)) }
-            } catch (e: java.io.IOException) {
-                null // the file was closed or can't be read any more
-            }
-        })
+        return Blip(PictureData(kind) { load(pib, offset, length) })
+    }
+
+    /** Pictures read lately, by pib, up to [CACHE_BYTES] in all: a logo on every
+     *  slide is read and inflated once, not once per slide. */
+    private val recent = object : LinkedHashMap<Int, ByteArray>(16, 0.75f, true) {}
+    private var recentBytes = 0L
+
+    private fun load(pib: Int, offset: Long, length: Int): ByteArray? = synchronized(recent) {
+        recent[pib]?.let { return it }
+        val bytes = try {
+            read?.invoke(offset, 8 + length)?.let { extract(RecordReader(it)) }
+        } catch (e: java.io.IOException) {
+            null // the file was closed or can't be read any more
+        } ?: return null
+        if (bytes.size <= CACHE_BYTES / 4) {
+            recent[pib] = bytes
+            recentBytes += bytes.size
+            val it = recent.entries.iterator()
+            while (recentBytes > CACHE_BYTES && it.hasNext()) { recentBytes -= it.next().value.size; it.remove() }
+        }
+        bytes
     }
 
     /** The picture in the blip record at the start of [r]. */
@@ -274,6 +289,9 @@ internal class BlipStore(private val read: ((offset: Long, length: Int) -> ByteA
         private val JPEG_MAGIC = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())
         private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
         val EMPTY = BlipStore(null, emptyList())
+
+        /** Pictures kept after drawing, in all. */
+        private const val CACHE_BYTES = 32L shl 20
 
         /** A blip record larger than this isn't read. */
         private const val MAX_BLIP_BYTES = SafeBitmaps.MAX_IMAGE_BYTES + 4096
