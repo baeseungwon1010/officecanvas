@@ -57,6 +57,10 @@ internal object PptParser {
         } catch (e: Ole2Reader.FormatException) {
             throw ParseException("not a .ppt: ${e.message}", e)
         }
+        return ole.use { parse(it) }
+    }
+
+    private fun parse(ole: Ole2Reader): Deck {
         val data = ole.readStream("PowerPoint Document")
             ?: throw ParseException("not a .ppt: missing PowerPoint Document stream")
         val currentUser = ole.readStream("Current User")

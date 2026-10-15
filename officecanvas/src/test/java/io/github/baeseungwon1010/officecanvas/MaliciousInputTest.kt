@@ -90,7 +90,7 @@ class MaliciousInputTest {
             for (i in 0 until 127) putInt(512 + i * 4, -1)
             putInt(512 + 127 * 4, 0)
         }, ".ppt")
-        survives { Ole2Reader.open(file) }
+        survives { Ole2Reader.open(file).close() }
     }
 
     @Test
@@ -100,7 +100,7 @@ class MaliciousInputTest {
             putInt(76, 0); putInt(48, 1)
             putInt(512, -3); putInt(516, 1)
         }, ".ppt")
-        survives { Ole2Reader.open(file) }
+        survives { Ole2Reader.open(file).close() }
     }
 
     @Test

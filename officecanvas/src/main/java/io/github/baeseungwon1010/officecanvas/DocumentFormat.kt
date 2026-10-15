@@ -54,11 +54,12 @@ enum class DocumentFormat {
         }
 
         private fun detectOle2(file: File): DocumentFormat? = try {
-            val ole = Ole2Reader.open(file)
-            when {
-                ole.readStream("PowerPoint Document") != null -> PPT
-                HwpParser.isHwp(ole) -> HWP
-                else -> null
+            Ole2Reader.open(file).use { ole ->
+                when {
+                    ole.hasStream("PowerPoint Document") -> PPT
+                    HwpParser.isHwp(ole) -> HWP
+                    else -> null
+                }
             }
         } catch (e: Exception) {
             null

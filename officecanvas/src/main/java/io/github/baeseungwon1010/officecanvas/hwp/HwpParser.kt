@@ -119,6 +119,10 @@ internal object HwpParser {
         } catch (e: Ole2Reader.FormatException) {
             throw ParseException("not a .hwp: ${e.message}", e)
         }
+        return ole.use { parse(it) }
+    }
+
+    private fun parse(ole: Ole2Reader): HwpxDoc {
         if (!isHwp(ole)) throw ParseException("not a .hwp: missing HWP FileHeader")
         val header = Bytes(ole.readStream("FileHeader")!!)
         val flags = header.u32(36)

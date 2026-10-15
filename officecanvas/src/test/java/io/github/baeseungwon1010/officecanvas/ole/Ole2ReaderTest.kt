@@ -53,4 +53,16 @@ class Ole2ReaderTest {
         val text = String(stream, Charsets.UTF_16LE)
         assertTrue("expected '샘플 발표 자료' inside the raw stream", text.contains("샘플 발표 자료"))
     }
+
+    @Test
+    fun `tells whether a stream exists without reading it, and every stream reads at its size`() {
+        Ole2Reader.open(sample("sample_deck.ppt")).use { ole ->
+            assertTrue(ole.hasStream("PowerPoint Document"))
+            assertTrue(!ole.hasStream("NoSuchStream"))
+            // Streams are read from the file on demand; reading them all (twice, in
+            // either order) gives the same bytes.
+            val first = ole.streamPaths.associateWith { ole.readStream(it)!! }
+            for (path in ole.streamPaths.reversed()) assertTrue(path, first[path]!!.contentEquals(ole.readStream(path)!!))
+        }
+    }
 }
