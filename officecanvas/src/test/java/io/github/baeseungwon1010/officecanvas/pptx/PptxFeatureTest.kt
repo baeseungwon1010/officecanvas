@@ -60,6 +60,25 @@ class PptxFeatureTest {
     }
 
     @Test
+    fun `a turned, flipped group turns its members, which take its fill`() {
+        val emu = 914400.0
+        val member = shapes(7).single { it.geometry == "rect" && it.fillArgb == 0xFFC00000.toInt() }
+        // Flipped about the group's center (6.75in, 5in), then turned 90 degrees.
+        assertEquals(7.0, (member.box.x + member.box.w / 2) / emu, 0.01)
+        assertEquals(5.25, (member.box.y + member.box.h / 2) / emu, 0.01)
+        assertEquals(90f, member.rotation, 0.01f)
+        assertTrue(member.flipH)
+    }
+
+    @Test
+    fun `a shape turned in 3-D keeps its camera and extrusion`() {
+        val s3 = shapes(7).mapNotNull { it.scene3d }.single()
+        assertEquals(60f, s3.lonDeg, 0.01f)
+        assertEquals(548640L, s3.depthEmu)
+        assertEquals(0xFF0000C0.toInt(), s3.extrusionArgb)
+    }
+
+    @Test
     fun `highlighted runs keep their highlight color`() {
         val run = shapes(7).mapNotNull { it.text }.flatMap { it.paragraphs }.flatMap { it.runs }.single { it.text == "highlighted" }
         assertEquals(0xFFFFC000.toInt(), run.highlightArgb)

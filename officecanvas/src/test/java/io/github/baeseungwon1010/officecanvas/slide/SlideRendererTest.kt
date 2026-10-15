@@ -102,6 +102,9 @@ class SlideRendererTest {
         // the second (5.5..8.5in) has none.
         org.junit.Assert.assertTrue("shadow under the first box: ${luma(405, 305)}", luma(405, 305) < 60)
         org.junit.Assert.assertTrue("no shadow under the second: ${luma(855, 305)}", luma(855, 305) > 200)
+        // The box turned 60 degrees in 3-D shows its blue extrusion beside it.
+        val blue = (840 until 1000).count { x -> bmp.getPixel(x, 500).let { p -> (p and 0xFF) > 150 && (p shr 16 and 0xFF) < 60 } }
+        org.junit.Assert.assertTrue("extrusion pixels: $blue", blue > 10)
         // White text on an amber highlight: the line's background is amber, not white.
         val amber = (0 until 400).count { x -> bmp.getPixel(110 + x, 500).let { p -> (p shr 16 and 0xFF) > 200 && (p and 0xFF) < 80 } }
         org.junit.Assert.assertTrue("highlight pixels: $amber", amber > 50)

@@ -108,7 +108,82 @@ internal object SlideRenderer {
         ((x + w) * scale).toFloat(), ((y + h) * scale).toFloat()
     )
 
+    /**
+     * A shape turned in 3-D is drawn flat into its turned plane: its box's corners,
+     * rotated by the camera and projected, map the whole drawing (fill, outline,
+     * text) onto the plane. An extrusion is its silhouette swept back from the
+     * shape to its depth, in the extrusion color, before the shape itself.
+     */
     private fun drawShape(canvas: Canvas, shape: Element.Shape, scale: Double) {
+        val s3 = shape.scene3d
+        if (s3 == null) { drawFlatShape(canvas, shape, scale); return }
+        val rect = shape.box.toRectF(scale)
+        val filled = shape.fillArgb != null || shape.gradient != null
+        if (s3.depthEmu > 0 && (filled || shape.strokeArgb != null) && rect.width() > 0f && rect.height() > 0f) {
+            val depth = (s3.depthEmu * scale).toFloat()
+            val color = s3.extrusionArgb ?: darker(shape.fillArgb ?: shape.gradient?.colors?.firstOrNull() ?: shape.strokeArgb!!)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.FILL }
+            // About a step per pixel of depth.
+            val steps = depth.toInt().coerceIn(2, 80)
+            for (i in steps downTo 1) {
+                canvas.save()
+                canvas.concat(plane(rect, s3, -depth * i / steps))
+                silhouette(canvas, shape, rect, paint)
+                canvas.restore()
+            }
+        }
+        canvas.save()
+        canvas.concat(plane(rect, s3, 0f))
+        drawFlatShape(canvas, shape, scale)
+        canvas.restore()
+    }
+
+    /** The shape's outline (or geometry), turned and flipped as it is drawn. */
+    private fun silhouette(canvas: Canvas, shape: Element.Shape, rect: RectF, paint: Paint) {
+        canvas.withRotation(shape.rotation, rect) {
+            canvas.save()
+            if (shape.flipH || shape.flipV) canvas.scale(if (shape.flipH) -1f else 1f, if (shape.flipV) -1f else 1f, rect.centerX(), rect.centerY())
+            val outline = shape.outline?.let { outlinePath(it, rect) }
+            if (outline != null) canvas.drawPath(outline, paint) else drawGeometry(canvas, shape.geometry, rect, paint)
+            canvas.restore()
+        }
+    }
+
+    /**
+     * The matrix that maps [rect] (on the slide) onto its plane turned by the
+     * camera of [s] and moved [z] px behind it: the corners are rotated about the
+     * box's center (in-plane first, then about the horizontal axis, then the
+     * vertical one) and projected, with perspective for perspective cameras.
+     */
+    private fun plane(rect: RectF, s: Scene3d, z: Float): android.graphics.Matrix {
+        val cx = rect.centerX(); val cy = rect.centerY()
+        val rev = Math.toRadians(s.revDeg.toDouble()); val lat = Math.toRadians(s.latDeg.toDouble()); val lon = Math.toRadians(-s.lonDeg.toDouble())
+        // Distance from the eye for a camera with about a 45-degree field of view.
+        val eye = if (s.perspective) maxOf(rect.width(), rect.height()) * 2.4 else Double.POSITIVE_INFINITY
+        val src = floatArrayOf(rect.left, rect.top, rect.right, rect.top, rect.right, rect.bottom, rect.left, rect.bottom)
+        val dst = FloatArray(8)
+        for (i in 0 until 4) {
+            var x = (src[2 * i] - cx).toDouble(); var y = (src[2 * i + 1] - cy).toDouble(); var zz = z.toDouble()
+            // In plane.
+            val x0 = x * kotlin.math.cos(rev) - y * kotlin.math.sin(rev); val y0 = x * kotlin.math.sin(rev) + y * kotlin.math.cos(rev)
+            x = x0; y = y0
+            // About the horizontal axis (latitude), then the vertical one (longitude).
+            val y1 = y * kotlin.math.cos(lat) - zz * kotlin.math.sin(lat); val z1 = y * kotlin.math.sin(lat) + zz * kotlin.math.cos(lat)
+            y = y1; zz = z1
+            val x2 = x * kotlin.math.cos(lon) + zz * kotlin.math.sin(lon); val z2 = -x * kotlin.math.sin(lon) + zz * kotlin.math.cos(lon)
+            x = x2; zz = z2
+            val k = if (eye.isInfinite()) 1.0 else eye / (eye - zz).coerceAtLeast(eye * 0.2)
+            dst[2 * i] = (cx + x * k).toFloat(); dst[2 * i + 1] = (cy + y * k).toFloat()
+        }
+        return android.graphics.Matrix().apply { setPolyToPoly(src, 0, dst, 0, 4) }
+    }
+
+    private fun darker(argb: Int): Int {
+        fun ch(shift: Int) = ((argb shr shift) and 0xFF) * 6 / 10
+        return (argb and 0xFF000000.toInt()) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+
+    private fun drawFlatShape(canvas: Canvas, shape: Element.Shape, scale: Double) {
         val rect = shape.box.toRectF(scale)
         if (shape.geometry == "line") {
             drawLine(canvas, shape, rect, scale)
@@ -360,6 +435,7 @@ internal object SlideRenderer {
             drawShadow(canvas, s, scale) { paint -> canvas.withRotation(picture.rotation, box) { canvas.drawRect(box, paint) } }
         }
         canvas.save()
+        picture.scene3d?.let { canvas.concat(plane(box, it, 0f)) }
         if (picture.rotation != 0f) canvas.rotate(picture.rotation, box.centerX(), box.centerY())
         if (picture.crop != null) canvas.clipRect(box)
         try {

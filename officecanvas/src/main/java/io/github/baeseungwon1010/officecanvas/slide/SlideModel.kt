@@ -55,7 +55,8 @@ internal sealed class Element {
         val outline: List<PathOp>? = null,
         /** Replaces [fillArgb] when set. */
         val gradient: Gradient? = null,
-        val shadow: Shadow? = null
+        val shadow: Shadow? = null,
+        val scene3d: Scene3d? = null
     ) : Element()
 
     data class Picture(
@@ -76,7 +77,8 @@ internal sealed class Element {
         val wmfBytes: ByteArray? = null,
         /** Fractions of the source image trimmed from each edge (negative = padding). */
         val crop: Crop? = null,
-        val shadow: Shadow? = null
+        val shadow: Shadow? = null,
+        val scene3d: Scene3d? = null
     ) : Element()
 
     data class Table(
@@ -109,6 +111,17 @@ internal data class Gradient(
     val rectangular: Boolean = false,
     val centerX: Float = 0.5f,
     val centerY: Float = 0.5f
+)
+
+/**
+ * A shape turned in 3-D: the camera's rotation about the horizontal axis
+ * ([latDeg]), the vertical one ([lonDeg]) and the view direction ([revDeg]),
+ * whether it looks in [perspective], and an extrusion [depthEmu] deep behind the
+ * shape in [extrusionArgb] (null: a darker shade of the fill).
+ */
+internal data class Scene3d(
+    val latDeg: Float, val lonDeg: Float, val revDeg: Float, val perspective: Boolean,
+    val depthEmu: Long = 0, val extrusionArgb: Int? = null
 )
 
 /** An outer shadow: the shape's silhouette in [argb] (with its alpha), offset by

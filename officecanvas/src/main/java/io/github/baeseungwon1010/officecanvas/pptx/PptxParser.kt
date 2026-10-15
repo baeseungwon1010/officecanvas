@@ -3,6 +3,7 @@ package io.github.baeseungwon1010.officecanvas.pptx
 import io.github.baeseungwon1010.officecanvas.slide.Box
 import io.github.baeseungwon1010.officecanvas.slide.Crop
 import io.github.baeseungwon1010.officecanvas.slide.Deck
+import io.github.baeseungwon1010.officecanvas.slide.Scene3d
 import io.github.baeseungwon1010.officecanvas.slide.Slide
 import io.github.baeseungwon1010.officecanvas.slide.TableCell
 import io.github.baeseungwon1010.officecanvas.util.Limits
@@ -342,7 +343,8 @@ internal object PptxParser {
             dashed = dash != null && dash != "solid",
             outline = geom.outline,
             gradient = if (geom.open) null else (fill as? Fill.Shaded)?.gradient,
-            shadow = shadow
+            shadow = shadow,
+            scene3d = scene3d(spPr, theme)
         )
         if (txXfrm != null && text != null) {
             out += Item.Shape(txXfrm, null, null, null, 0, text, rotation = rotationOf(spPr))
@@ -370,7 +372,29 @@ internal object PptxParser {
         }
         val shadow = ctx.theme.shadowOf(spPr?.child(NS_A, "effectLst")
             ?: node.child(NS_P, "style")?.child(NS_A, "effectRef")?.getAttribute("idx")?.toIntOrNull()?.let { ctx.theme.effectStyle(it) })
-        return Item.Picture(box = box, imageEntry = target, rotation = spPr?.let { rotationOf(it) } ?: 0f, crop = crop, shadow = shadow)
+        return Item.Picture(box = box, imageEntry = target, rotation = spPr?.let { rotationOf(it) } ?: 0f, crop = crop, shadow = shadow,
+            scene3d = scene3d(spPr, ctx.theme))
+    }
+
+    /**
+     * A shape's 3-D view: the camera's explicit rotation (`<a:scene3d><a:camera>
+     * <a:rot lat lon rev>`, in 1/60000 degree) and the extrusion behind it
+     * (`<a:sp3d extrusionH>`, `<a:extrusionClr>`). Null when the shape faces the
+     * viewer: then an extrusion is hidden behind it. Preset cameras without a
+     * rotation are taken as facing the viewer.
+     */
+    private fun scene3d(spPr: DomElement?, theme: Theme): Scene3d? {
+        val camera = spPr?.child(NS_A, "scene3d")?.child(NS_A, "camera") ?: return null
+        val rot = camera.child(NS_A, "rot") ?: return null
+        fun deg(name: String) = ((rot.longOrNull(name) ?: 0L) % 21_600_000L / 60000f).let { if (it > 180f) it - 360f else it }
+        val lat = deg("lat"); val lon = deg("lon"); val rev = deg("rev")
+        if (kotlin.math.abs(lat) < 0.5f && kotlin.math.abs(lon) < 0.5f) return null
+        val sp3d = spPr.child(NS_A, "sp3d")
+        return Scene3d(
+            lat, lon, rev, perspective = camera.attr("prst")?.startsWith("perspective") == true,
+            depthEmu = sp3d?.longOrNull("extrusionH")?.coerceIn(0, 5_000_000) ?: 0L,
+            extrusionArgb = theme.colorIn(sp3d?.child(NS_A, "extrusionClr"))
+        )
     }
 
     private fun graphicFrame(node: DomElement, part: String, ctx: SlideContext): List<Item> {

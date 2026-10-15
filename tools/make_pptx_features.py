@@ -16,7 +16,8 @@ tests check exactly (PptxParserTest, SlideRendererTest).
   7. a table in PowerPoint's default style (stored by id only), and one with no
      style whose rows are saved shorter than their text
   8. effects: a hard outer shadow, an empty effect list overriding the style's
-     theme shadow, white text on a highlight
+     theme shadow, white text on a highlight, a turned and flipped group whose
+     member takes the group's fill, a shape turned and extruded in 3-D
   9. a hidden slide (skipped)
 Run: python3 make_pptx_features.py <outdir>, or tools/build_fixtures.sh"""
 import copy
@@ -191,6 +192,37 @@ run.font.size = Pt(40)
 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 hl = etree.SubElement(run._r.get_or_add_rPr(), qn("a:highlight"))
 etree.SubElement(hl, qn("a:srgbClr"), val="FFC000")
+
+# A group filled red, turned 90 degrees and flipped, whose rectangle takes the
+# group's fill (<a:grpFill/>); and a rectangle turned 60 degrees about the
+# vertical axis in 3-D, extruded in blue.
+grp = s.shapes.add_group_shape()
+inner = grp.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6), Inches(4.5), Inches(1), Inches(0.5))
+inner.line.fill.background()
+spPr = inner._element.spPr
+for child in list(spPr):
+    if child.tag in (qn("a:solidFill"), qn("a:noFill")):
+        spPr.remove(child)
+spPr.insert(list(spPr).index(spPr.find(qn("a:prstGeom"))) + 1, etree.Element(qn("a:grpFill")))
+grp.shapes.add_shape(MSO_SHAPE.OVAL, Inches(7), Inches(5), Inches(0.5), Inches(0.5)).line.fill.background()
+grpSpPr = grp._element.grpSpPr
+xfrm = grpSpPr.find(qn("a:xfrm"))
+xfrm.set("rot", str(90 * 60000))
+xfrm.set("flipH", "1")
+fill = etree.SubElement(grpSpPr, qn("a:solidFill"))
+etree.SubElement(fill, qn("a:srgbClr"), val="C00000")
+box3d = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(8.4), Inches(4.4), Inches(1.2), Inches(1.2))
+box3d.fill.solid()
+box3d.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+box3d.line.fill.background()
+spPr = box3d._element.spPr
+scene = etree.SubElement(spPr, qn("a:scene3d"))
+camera = etree.SubElement(scene, qn("a:camera"), prst="orthographicFront")
+etree.SubElement(camera, qn("a:rot"), lat="0", lon=str(60 * 60000), rev="0")
+etree.SubElement(scene, qn("a:lightRig"), rig="threePt", dir="t")
+sp3d = etree.SubElement(spPr, qn("a:sp3d"), extrusionH=str(Inches(0.6)))
+clr = etree.SubElement(sp3d, qn("a:extrusionClr"))
+etree.SubElement(clr, qn("a:srgbClr"), val="0000C0")
 
 # 9: hidden slide
 s = prs.slides.add_slide(blank)
