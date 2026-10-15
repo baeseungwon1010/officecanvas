@@ -112,4 +112,25 @@ class HwpxParserTest {
         assertEquals(4, table.rowHeightsHu.size)
         assertTrue("${table.rowHeightsHu}", table.rowHeightsHu.last() >= 2000)
     }
+
+    @Test
+    fun `a NARROWLY page is laid out sideways`() {
+        fun doc(landscape: String): HwpxDoc {
+            val f = File.createTempFile("page", ".hwpx").apply { deleteOnExit() }
+            java.util.zip.ZipOutputStream(f.outputStream()).use { z ->
+                fun put(name: String, text: String) { z.putNextEntry(java.util.zip.ZipEntry(name)); z.write(text.toByteArray()); z.closeEntry() }
+                put("mimetype", "application/hwp+zip")
+                put("Contents/content.hpf", """<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="s" href="Contents/section0.xml"/></opf:manifest><opf:spine><opf:itemref idref="s"/></opf:spine></opf:package>""")
+                put("Contents/header.xml", """<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>""")
+                put("Contents/section0.xml", """<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"><hp:p><hp:run><hp:secPr><hp:pagePr landscape="$landscape" width="59528" height="84186"><hp:margin left="2267" right="2267" top="1417" bottom="1417" header="0" footer="0" gutter="0"/></hp:pagePr></hp:secPr><hp:t>x</hp:t></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="79652"/></hp:linesegarray></hp:p></hs:sec>""")
+            }
+            return HwpxParser.parse(f)
+        }
+        // A real form saved as NARROWLY 59528 x 84186 had its lines 79652 wide:
+        // 84186 less the two side margins.
+        val sideways = doc("NARROWLY").pages.single()
+        assertEquals(84186L to 59528L, sideways.widthHu to sideways.heightHu)
+        val upright = doc("WIDELY").pages.single()
+        assertEquals(59528L to 84186L, upright.widthHu to upright.heightHu)
+    }
 }

@@ -100,7 +100,11 @@ internal object HwpxParser {
         secPr?.getAttribute("outlineShapeIDRef")?.toIntOrNull()?.let { state.get().outlineNumbering = it }
         val geometry = secPr?.let {
             val pagePr = it.child(HP, "pagePr")
-            val w = pagePr?.longOrNull("width"); val h = pagePr?.longOrNull("height")
+            var w = pagePr?.longOrNull("width"); var h = pagePr?.longOrNull("height")
+            // landscape="NARROWLY" is a sideways page: the saved size is the upright
+            // one, and the lines are laid out across the long side (WIDELY is upright,
+            // the default, despite its name).
+            if (pagePr?.getAttribute("landscape") == "NARROWLY" && w != null && h != null && w < h) { val t = w; w = h; h = t }
             // Lineseg positions are relative to the body area, which starts after the
             // left margin (plus gutter) and below the top margin plus the header area.
             val margin = pagePr?.child(HP, "margin")
