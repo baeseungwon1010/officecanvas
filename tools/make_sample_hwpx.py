@@ -7,8 +7,9 @@ one full-width character per 1000 HWPUNIT) instead of a real layout engine.
 
 Page furniture and objects: a header with a tab and the page number field, a
 page number at the bottom center ("- 2 -"), a floating rectangle text box, an
-inline line and a cropped picture; and numbered and bulleted paragraphs and an
-equation in a line of text at the end.
+inline line and a cropped picture, a first page that hides its page number,
+page numbers that start over on the last page, and numbered and bulleted
+paragraphs and an equation in a line of text at the end.
 Run: python3 make_sample_hwpx.py <outdir>"""
 import struct
 import sys
@@ -180,13 +181,15 @@ def object_paragraph(layout, objects, height, width):
 
 def header_ctrl():
     """Header text with a tab (and the width it took) and the page number field,
-    and the page number at the bottom."""
+    the page number at the bottom, and hiding it on the first page."""
     th, base, spacing = metrics(2)
     return ('<hp:ctrl><hp:header id="1" applyPageType="BOTH"><hp:subList vertAlign="BOTTOM">'
             '<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="2"><hp:t>OfficeCanvas 샘플<hp:tab width="20000" leader="0" type="1"/>쪽 </hp:t>'
             '<hp:ctrl><hp:autoNum num="1" numType="PAGE"><hp:autoNumFormat type="DIGIT"/></hp:autoNum></hp:ctrl>'
             f'<hp:t/></hp:run><hp:linesegarray>{lineseg(0, 0, 2)}</hp:linesegarray></hp:p></hp:subList></hp:header></hp:ctrl>'
-            '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>')
+            '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>'
+            # The first page hides its page number.
+            '<hp:ctrl><hp:pageHiding hideHeader="0" hideFooter="0" hideMasterPage="0" hideBorder="0" hideFill="0" hidePageNum="1"/></hp:ctrl>')
 
 
 BODY = ("이 문서는 OfficeCanvas의 HWPX 렌더러를 시험하기 위해 만든 합성 문서입니다. 한글은 문서를 저장할 때 "
@@ -214,7 +217,8 @@ paras.append(object_paragraph(layout, rule(BODY_W), 600, BODY_W))
 paras.append(object_paragraph(layout, picture(8000, 8000), 8000, 8000))
 for i in range(8):
     paras.append(paragraph(layout, f"({i + 10}) " + BODY))
-paras.append(paragraph(layout, "3. 맺음말", 1))
+# Page numbers start over at 1 on the last page.
+paras.append(paragraph(layout, "3. 맺음말", 1, sec_pr='<hp:ctrl><hp:newNum num="1" numType="PAGE"/></hp:ctrl>'))
 paras.append(paragraph(layout, "이 샘플은 실제 문서를 대신해 테스트에 쓰입니다.", 2))
 # Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
 for text, para_pr in [("첫째 항목", 1), ("세부 항목", 2), ("둘째 항목", 1), ("점 항목", 3)]:

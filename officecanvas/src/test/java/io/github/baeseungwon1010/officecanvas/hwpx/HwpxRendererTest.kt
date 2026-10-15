@@ -63,10 +63,14 @@ class HwpxRendererTest {
 
     @Test
     fun `header and page number repeat on every page`() {
+        // Numbers start over on the last page, and the first page hides its
+        // page number (but not the number in its header).
+        val numbers = listOf(1, 2, 1)
         for (i in doc.pages.indices) {
             val r = runs(i)
-            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 샘플\t쪽 ${i + 1}" && it.yHu < 0 })
-            assertTrue("page number on page ${i + 1}", r.any { it.text == "- ${i + 1} -" && it.align == ParaAlign.CENTER })
+            val n = numbers[i]
+            assertTrue("header on page ${i + 1}", r.any { it.text == "OfficeCanvas 샘플\t쪽 $n" && it.yHu < 0 })
+            assertEquals("page number on page ${i + 1}", i != 0, r.any { it.text == "- $n -" && it.align == ParaAlign.CENTER })
         }
     }
 

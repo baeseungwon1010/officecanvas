@@ -5,8 +5,9 @@ alignment, a cell that leaves its margins to the table, an embedded PNG
 cropped to its right half, a header line ending in a tab and the page number
 field, a page number at the bottom center ("- 2 -"), a floating rectangle text
 box, an inline line, a paragraph marked as starting a page while its line sits
-at the top like the one before it, numbered and bulleted paragraphs, and an
-equation in a line of text.
+at the top like the one before it, numbered and bulleted paragraphs, an
+equation in a line of text, a first page that hides its page number and page
+numbers that start over on the last page.
 
 Every line carries its saved position (PARA_LINE_SEG), computed here with fixed
 metrics the way make_sample_hwpx.py does. The OLE2 container is written by a
@@ -261,8 +262,10 @@ head_para = paragraph(2, None, "OfficeCanvas 머리말\t", 3, 0, lines_at=[0], c
 head = rec(71, 1, struct.pack("<I", 0x68656164) + struct.pack("<I", 0)) + head_list + head_para
 # Bottom center (5), with "-" as the side character: "- 2 -".
 pgnp = rec(71, 1, struct.pack("<I", 0x70676E70) + struct.pack("<I", 5 << 8) + struct.pack("<HHHH", 0, 0, 0, ord("-")))
+# The first page hides its page number (bit 5).
+pghd = rec(71, 1, struct.pack("<I", 0x70676864) + struct.pack("<I", 0x20))
 section += paragraph(0, flow, "1. 문서 구조와 줄 위치", 2, 1,
-                     controls=secd + head + pgnp, ctrl_text=ctrl_chars(2, 16, 21))
+                     controls=secd + head + pgnp + pghd, ctrl_text=ctrl_chars(2, 16, 21, 21))
 
 BODY = ("이 문서는 OfficeCanvas의 HWP 렌더러를 시험하기 위해 만든 합성 문서입니다. 한글은 문서를 저장할 때 "
         "각 줄이 놓일 위치와 페이지가 나뉘는 지점을 미리 계산해서 파일 안에 남겨 두기 때문에, 렌더러는 줄바꿈과 "
@@ -356,7 +359,9 @@ for i in range(9):
 # A page break whose first line sits at the top just like the previous page's.
 flow.y = 0
 flow.pages += 1
-section += paragraph(0, flow, "3. 맺음말", 1, page_break=True)
+# Page numbers start over at 1 on the last page.
+nwno = rec(71, 1, struct.pack("<I", 0x6E776E6F) + struct.pack("<IH", 0, 1))
+section += paragraph(0, flow, "3. 맺음말", 1, page_break=True, controls=nwno, ctrl_text=ctrl_chars(21))
 section += paragraph(0, flow, "이 샘플은 실제 문서를 대신해 테스트에 쓰입니다.", 3)
 # Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
 for text, shape in [("첫째 항목", 3), ("세부 항목", 4), ("둘째 항목", 3), ("점 항목", 5)]:

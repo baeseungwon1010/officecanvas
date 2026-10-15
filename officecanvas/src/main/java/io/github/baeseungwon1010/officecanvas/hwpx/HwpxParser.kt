@@ -76,7 +76,7 @@ internal object HwpxParser {
             if (pages.size >= Limits.MAX_PAGES) break
             try {
                 val doc = zip.xml(path) ?: continue
-                parseSection(doc, header, lastGeometry, pages.size).forEach { (geometry, page) ->
+                parseSection(doc, header, lastGeometry).forEach { (geometry, page) ->
                     lastGeometry = geometry
                     if (pages.size < Limits.MAX_PAGES) pages += page
                 }
@@ -93,7 +93,7 @@ internal object HwpxParser {
      *  reset to a smaller value than the previous line means Hangul started a new
      *  page when it saved this file (verified against a real 3-page document —
      *  see [HwpxDoc]). */
-    private fun parseSection(doc: Document, header: Header, fallbackGeometry: PageGeometry, firstPageIndex: Int): List<Pair<PageGeometry, HwpxPage>> {
+    private fun parseSection(doc: Document, header: Header, fallbackGeometry: PageGeometry): List<Pair<PageGeometry, HwpxPage>> {
         val root = doc.documentElement
         val paragraphs = root.all(HP, "p")
         val secPr = paragraphs.firstOrNull()?.run(HP, "run")?.child(HP, "secPr")
@@ -128,22 +128,34 @@ internal object HwpxParser {
             // pageBreak="1": the paragraph starts a page even when its first line
             // sits as high as the previous page's last paragraph did.
             val forcedBreak = p.getAttribute("pageBreak") == "1"
+            val firstLineY = p.child(HP, "linesegarray")?.child(HP, "lineseg")?.longOrNull("vertpos")
+            var startPage = flow.pageFor(firstLineY, forcedBreak)
             for ((k, el) in parseParagraphFlow(p, header, 0).withIndex()) {
                 flow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in state.get().lineStarts,
                     floating = el in state.get().placedFloating)
+                if (k == 0) startPage = flow.page
             }
             // Header, footer and page number controls apply from the page their
-            // paragraph starts on (flow.page is approximate for a paragraph that
-            // runs onto the next page, where these controls are rare).
+            // paragraph starts on; hiding applies to that page only.
+            // Within one paragraph the first header (footer) for the same pages counts.
+            val seen = HashSet<Pair<String, String>>()
             for (ctrl in p.all(HP, "run").flatMap { it.all(HP, "ctrl") }.flatMap { it.children() }) {
-                decorControl(ctrl, header)?.let { decor.change(flow.page, it) }
+                if (ctrl.localName in setOf("header", "footer") && !seen.add(ctrl.localName to ctrl.getAttribute("applyPageType"))) continue
+                decorControl(ctrl, header)?.let { decor.change(startPage, it) }
+                when (ctrl.localName) {
+                    "pageHiding" -> decor.hide(startPage, PageHiding(
+                        ctrl.getAttribute("hideHeader") == "1", ctrl.getAttribute("hideFooter") == "1", ctrl.getAttribute("hidePageNum") == "1"))
+                    "newNum" -> if (ctrl.getAttribute("numType").let { it.isBlank() || it == "PAGE" })
+                        ctrl.getAttribute("num").toIntOrNull()?.let { decor.restart(startPage, it) }
+                }
             }
         }
-        var number = firstPageIndex
+        // Page numbers run on through the sections.
+        val st = state.get()
         return flow.finish().map { (index, elements) ->
-            number++
+            val number = decor.number(index, st.pageNumber).also { st.pageNumber = it }
             geometry to HwpxPage(geometry.widthHu, geometry.heightHu,
-                decor.at(index).elements(number, pg) + elements.map { it.withPageNumber(number) },
+                decor.at(index).elements(number, pg, decor.hidingAt(index)) + elements.map { it.withPageNumber(number) },
                 geometry.bodyXHu, geometry.bodyYHu)
         }
     }
@@ -198,6 +210,8 @@ internal object HwpxParser {
         var bodyYHu = 0L
         var bodyWidthHu = 42520L
         var heads = ParaHead(emptyList(), emptyList())
+        /** The number of the last page so far. */
+        var pageNumber = 0
         /** The numbering outline paragraphs use (the section's outlineShapeIDRef). */
         var outlineNumbering = 0
     }

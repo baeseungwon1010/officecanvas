@@ -33,11 +33,12 @@ internal data class PageDecor(
     fun withFooter(area: DecorArea, pages: Int) =
         copy(oddFooter = if (pages != 1) area else oddFooter, evenFooter = if (pages != 2) area else evenFooter)
 
-    /** The decoration for page [number] (1-based) of a page with [g]'s geometry. */
-    fun elements(number: Int, g: Geometry): List<HwpxElement> {
+    /** The decoration for page [number] (1-based) of a page with [g]'s geometry,
+     *  less what [hiding] hides on that page. */
+    fun elements(number: Int, g: Geometry, hiding: PageHiding? = null): List<HwpxElement> {
         val out = mutableListOf<HwpxElement>()
-        val header = if (number % 2 == 0) evenHeader else oddHeader
-        val footer = if (number % 2 == 0) evenFooter else oddFooter
+        val header = (if (number % 2 == 0) evenHeader else oddHeader)?.takeUnless { hiding?.header == true }
+        val footer = (if (number % 2 == 0) evenFooter else oddFooter)?.takeUnless { hiding?.footer == true }
         if (header != null) {
             val dy = -g.headerHu + offset(header, g.headerHu)
             header.content.forEach { out += it.shiftedBy(0, dy).withPageNumber(number) }
@@ -47,7 +48,7 @@ internal data class PageDecor(
             val dy = footerTop + offset(footer, g.footerHu)
             footer.content.forEach { out += it.shiftedBy(0, dy).withPageNumber(number) }
         }
-        val pos = pageNumberPosition
+        val pos = pageNumberPosition?.takeUnless { hiding?.pageNumber == true }
         if (pos != null && pos in 1..6) {
             val width = g.widthHu - g.bodyXHu - g.rightHu
             val y = if (pos <= 3) -g.headerHu / 2 - 500 else footerTop + g.footerHu / 2 - 500
@@ -85,6 +86,8 @@ internal data class PageDecor(
 internal class DecorTimeline {
     private val changes = mutableListOf<Pair<Int, PageDecor>>()
     private var current = PageDecor.NONE
+    private val hidden = HashMap<Int, PageHiding>()
+    private val restarts = HashMap<Int, Int>()
 
     fun change(page: Int, f: (PageDecor) -> PageDecor) {
         current = f(current)
@@ -92,7 +95,23 @@ internal class DecorTimeline {
     }
 
     fun at(page: Int): PageDecor = changes.lastOrNull { it.first <= page }?.second ?: PageDecor.NONE
+
+    /** Hides parts of the decoration on [page] only (a cover page, say). */
+    fun hide(page: Int, h: PageHiding) {
+        hidden[page] = hidden[page]?.let { PageHiding(it.header || h.header, it.footer || h.footer, it.pageNumber || h.pageNumber) } ?: h
+    }
+
+    fun hidingAt(page: Int): PageHiding? = hidden[page]
+
+    /** Page numbers start over at [number] from [page]. */
+    fun restart(page: Int, number: Int) { restarts[page] = number }
+
+    /** The number of [page], one past [previous] unless numbering starts over there. */
+    fun number(page: Int, previous: Int): Int = restarts[page] ?: (previous + 1)
 }
+
+/** What a page hides of its section's decoration. */
+internal class PageHiding(val header: Boolean, val footer: Boolean, val pageNumber: Boolean)
 
 /**
  * Where an object placed relative to its paragraph goes, given the line it is

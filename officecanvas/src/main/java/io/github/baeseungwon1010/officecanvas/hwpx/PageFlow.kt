@@ -58,6 +58,12 @@ internal class PageFlow(private val bodyHeightHu: Long) {
     /** The page being filled (0-based, counting pages that may end up empty). */
     val page: Int get() = pages.size - 1
 
+    /** The page a paragraph whose first line is saved at [firstLineY] lands on,
+     *  without adding anything: for paragraphs with nothing to draw (one holding
+     *  only a header or footer control, say). */
+    fun pageFor(firstLineY: Long?, startsPage: Boolean): Int =
+        if (firstLineY != null && (firstLineY <= lastY || startsPage && pages.last().isNotEmpty())) page + 1 else page
+
     /** The non-empty pages, with their indices as [page] counted them. */
     fun finish(): List<IndexedValue<List<HwpxElement>>> {
         settlePending(0)

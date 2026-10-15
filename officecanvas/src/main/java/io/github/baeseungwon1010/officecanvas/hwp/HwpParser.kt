@@ -21,6 +21,7 @@ import io.github.baeseungwon1010.officecanvas.hwpx.ImageCrop
 import io.github.baeseungwon1010.officecanvas.hwpx.PAGE_NUMBER_MARK
 import io.github.baeseungwon1010.officecanvas.hwpx.PageDecor
 import io.github.baeseungwon1010.officecanvas.hwpx.PageFlow
+import io.github.baeseungwon1010.officecanvas.hwpx.PageHiding
 import io.github.baeseungwon1010.officecanvas.hwpx.withPageNumber
 import io.github.baeseungwon1010.officecanvas.hwpx.ParaAlign
 import io.github.baeseungwon1010.officecanvas.hwpx.Span
@@ -158,14 +159,16 @@ internal object HwpParser {
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
         // Paragraph numbers count on from one section to the next.
         val heads = ParaHead(info.numberings, info.bullets)
+        var pageNumber = 0
         for (data in sections) {
             if (pages.size >= Limits.MAX_PAGES) break
             data ?: continue
             try {
-                val section = Section(info, ::picture, pages.size, heads)
+                val section = Section(info, ::picture, pageNumber, heads)
                 val roots = Record.tree(Bytes(data))
                 section.read(roots, geometry)
                 geometry = section.geometry
+                pageNumber = section.pageNumber
                 for (page in section.pages) if (pages.size < Limits.MAX_PAGES) pages += page
             } catch (e: Exception) {
                 // One unreadable section costs its own pages, not the whole document.
@@ -422,7 +425,9 @@ internal object HwpParser {
         return out
     }
 
-    private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, val firstPageIndex: Int, val heads: ParaHead) {
+    /** [pageNumber]: the number of the page before the section's first (numbering
+     *  runs on through sections); after [read], that of its last page. */
+    private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, var pageNumber: Int, val heads: ParaHead) {
         /** The numbering outline paragraphs use (the section definition's, 1-based). */
         private var outlineNumbering = 0
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
@@ -441,6 +446,9 @@ internal object HwpParser {
             val decor = DecorTimeline()
             for (para in roots.filter { it.tag == PARA_HEADER }) {
                 val changes = mutableListOf<(PageDecor) -> PageDecor>()
+                val hidings = mutableListOf<PageHiding>()
+                val seen = HashSet<Pair<String, Int>>()
+                var restart: Int? = null
                 // The section definition rides on the first paragraph's controls.
                 for (ctrl in para.all(CTRL_HEADER)) when (ctrl.ctrlId) {
                     "secd" -> {
@@ -449,10 +457,18 @@ internal object HwpParser {
                     }
                     // Header and footer: a list of paragraphs placed in the header
                     // (footer) area; attribute bits 0-1 say which pages (both, even, odd).
-                    "head" -> area(ctrl).let { a -> changes += { it.withHeader(a, ctrl.body.u32(4) and 0x3) } }
-                    "foot" -> area(ctrl).let { a -> changes += { it.withFooter(a, ctrl.body.u32(4) and 0x3) } }
+                    // Within one paragraph the first header (footer) for the same pages
+                    // counts; a template had a second, empty one after its table.
+                    "head" -> if (seen.add("head" to (ctrl.body.u32(4) and 0x3)))
+                        area(ctrl).let { a -> changes += { it.withHeader(a, ctrl.body.u32(4) and 0x3) } }
+                    "foot" -> if (seen.add("foot" to (ctrl.body.u32(4) and 0x3)))
+                        area(ctrl).let { a -> changes += { it.withFooter(a, ctrl.body.u32(4) and 0x3) } }
                     // Page number position: attributes (bits 8-11: position), then the
                     // user, prefix, suffix and side characters.
+                    // Hiding on this page (bits 0 header, 1 footer, 5 page number), and
+                    // page numbers starting over (number type 0, then the number).
+                    "pghd" -> ctrl.body.u32(4).let { a -> hidings += PageHiding(a and 0x1 != 0, a and 0x2 != 0, a and 0x20 != 0) }
+                    "nwno" -> if (ctrl.body.u32(4) and 0xF == 0) restart = ctrl.body.u16(8)
                     "pgnp" -> {
                         val pos = (ctrl.body.u32(4) ushr 8) and 0xF
                         val side = ctrl.body.u16(14).takeIf { it in 33..0xFFFF }?.toChar()?.toString().orEmpty()
@@ -465,17 +481,22 @@ internal object HwpParser {
                 // break's first line is at the top like the previous page's, so the
                 // flag is what tells them apart.
                 val forcedBreak = para.body.u8(11) and 0x05 != 0
+                var startPage = pageFlow.pageFor(lineSegs(para).firstOrNull()?.y, forcedBreak)
                 for ((k, el) in paragraph(para, 0).withIndex()) {
                     pageFlow.add(el, startsPage = k == 0 && forcedBreak, startsLine = el in lineStarts, floating = el in placedFloating)
+                    if (k == 0) startPage = pageFlow.page
                 }
-                // These controls apply from the page their paragraph starts on.
-                changes.forEach { decor.change(pageFlow.page, it) }
+                // These controls apply from the page their paragraph starts on
+                // (hiding to that page only).
+                changes.forEach { decor.change(startPage, it) }
+                hidings.forEach { decor.hide(startPage, it) }
+                restart?.let { decor.restart(startPage, it) }
             }
             val g = geometry
             val pg = PageDecor.Geometry(g.widthHu, g.heightHu, g.bodyXHu, g.bodyYHu, g.rightHu, g.bottomHu, g.headerHu, g.footerHu)
             for ((index, elements) in flow?.finish().orEmpty()) {
-                val number = firstPageIndex + pages.size + 1
-                pages += HwpxPage(g.widthHu, g.heightHu, decor.at(index).elements(number, pg) + elements.map { it.withPageNumber(number) }, g.bodyXHu, g.bodyYHu)
+                val number = decor.number(index, pageNumber).also { pageNumber = it }
+                pages += HwpxPage(g.widthHu, g.heightHu, decor.at(index).elements(number, pg, decor.hidingAt(index)) + elements.map { it.withPageNumber(number) }, g.bodyXHu, g.bodyYHu)
             }
         }
 
