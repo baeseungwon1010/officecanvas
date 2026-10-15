@@ -238,7 +238,8 @@ private fun Theme.paragraph(
             "r", "fld" -> runs += run(child, child.child(NS_A, "t")?.textContent ?: "", style, fontScale)
         }
     }
-    val endSize = runStyle(node.child(NS_A, "endParaRPr")).sizePt
+    // An empty paragraph is as tall as its end mark's size, else its level's.
+    val endSize = runStyle(node.child(NS_A, "endParaRPr")).sizePt ?: style.sizePt
     if (runs.isEmpty() && endSize != null) runs += Run("", sizePt = endSize * fontScale)
 
     val hasText = runs.any { it.text.isNotBlank() }
