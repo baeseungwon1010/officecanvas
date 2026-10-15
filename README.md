@@ -86,11 +86,12 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular |
 | Tables | ✓ incl. table styles | as the shapes PowerPoint stores |
 | SmartArt | from the drawing PowerPoint saves with it | — |
+| Charts | bar and column (clustered, stacked, 100%), line, area, pie, doughnut, from the values cached in the chart part; title, legend, axis and value labels | — |
 | Pictures | PNG, JPEG, EMF, WMF, SVG; crop | PNG, JPEG, EMF, WMF, DIB, TIFF, PICT with embedded JPEG/PNG; crop |
 | Slide background | solid, gradient, picture | solid, picture, gradient |
 | Hidden slides | skipped | skipped, as PowerPoint's own export does |
 
-Not rendered: charts, shadows, glow, 3-D effects, text highlight, animations, video, embedded OLE objects other than their preview picture.
+Not rendered: scatter, radar and 3-D charts, shadows, glow, 3-D effects, text highlight, animations, video, embedded OLE objects other than their preview picture.
 
 ### Hangul documents
 

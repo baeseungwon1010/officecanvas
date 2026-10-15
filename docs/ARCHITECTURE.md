@@ -24,6 +24,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 
 **`pptx`**: the 2007+ XML format.
 - `PptxParser`: presentation → slide list → each slide with its layout, master and theme; placeholders, backgrounds, groups, pictures, tables, SmartArt drawings.
+- `Chart.kt` (`ChartParser`): a chart part laid out as ordinary shapes (bars as rectangles, lines and slices as outlines, labels as text boxes), so the renderer needs nothing chart-specific.
 - `Theme`: the color scheme, color map, theme fonts and format scheme; color modifiers and fills, including style references.
 - `Text`: list styles, paragraph and run properties, body properties, numbering.
 - `Geometry`: preset shape formulas and custom geometry paths.
