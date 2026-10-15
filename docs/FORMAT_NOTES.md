@@ -4,7 +4,7 @@ What the files contain, as found by reading real files byte by byte, and the pla
 
 ## PPTX
 
-A zip of XML parts. Every shape has an absolute position (`<a:xfrm>`, in EMU), so there is no layout to compute; the work is resolving inheritance. Checked against LibreOffice on 15 real decks (see TESTING).
+A zip of XML parts. Every shape has an absolute position (`<a:xfrm>`, in EMU), so there is no layout to compute; the work is resolving inheritance. Checked against LibreOffice on 34 real decks (see TESTING).
 
 - **Inheritance chain.** A slide uses a layout, the layout a master, the master a theme. A slide placeholder matches the layout placeholder with the same `idx` (or, without one, the same type), and that one the master placeholder of the same kind (title, body, date, footer, slide number; subtitles and content placeholders map to body). Position, geometry, fill, outline, body properties (`<a:bodyPr>` anchor, insets, wrap, autofit) and list styles are each taken from the nearest level that sets them. Most placeholders on real slides store no position at all, and a title placeholder's bottom anchor usually lives on the master, so skipping either level drops or misplaces text.
 - **Text styles, nearest first:** the run, the paragraph, the shape's own `<a:lstStyle>`, the layout placeholder's, the master placeholder's, then the master's `titleStyle`, `bodyStyle` or `otherStyle`. Text boxes that aren't placeholders use the presentation's `defaultTextStyle`.
