@@ -51,7 +51,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 
 **`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model. `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
 
-**`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree).
+**`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree). It reads streams from the file when asked for rather than loading the file whole; close it when done.
 
 **`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), `SvgRenderer` (the SVG subset of Office icons), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
 
