@@ -300,11 +300,11 @@ private fun Theme.run(node: Element, text: String, paragraph: LevelStyle, fontSc
     )
 }
 
-/** Percent spacing is a fraction of the line (font size x 1.2, rounded the way
- *  LibreOffice measures it: size x 1.25). */
+/** Percent spacing counts lines, as PowerPoint shows it ("0.2 lines"): a line
+ *  is 1.2 x the font size, the same single line the line pitch uses. */
 private fun spacingPt(s: Spacing?, sizePt: Float, fontScale: Float): Float = when (s) {
     is Spacing.Points -> s.pt * fontScale
-    is Spacing.Percent -> s.pct / 100f * sizePt * 1.25f
+    is Spacing.Percent -> s.pct / 100f * sizePt * 1.2f
     null -> 0f
 }
 
