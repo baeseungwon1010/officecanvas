@@ -84,7 +84,9 @@ def cell(row, col, width, text):
             f'<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>{escape(text)}</hp:t></hp:run>'
             f'<hp:linesegarray>{"".join(segs)}</hp:linesegarray></hp:p></hp:subList>'
             f'<hp:cellAddr colAddr="{col}" rowAddr="{row}"/><hp:cellSpan colSpan="1" rowSpan="1"/>'
-            f'<hp:cellSz width="{width}" height="2000"/><hp:cellMargin left="510" right="510" top="141" bottom="141"/></hp:tc>')
+            # hasMargin="0": the table's <hp:inMargin> applies, not this "unset" value.
+            f'<hp:cellSz width="{width}" height="2000"/><hp:cellMargin left="4294967295" right="4294967295" '
+            f'top="4294967295" bottom="4294967295"/></hp:tc>')
 
 
 def table(layout, rows):
@@ -99,6 +101,7 @@ def table(layout, rows):
            f'<hp:sz width="{BODY_W}" widthRelTo="ABSOLUTE" height="{height}" heightRelTo="ABSOLUTE" protect="0"/>'
            f'<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" '
            f'vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>'
+           f'<hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:inMargin left="510" right="510" top="141" bottom="141"/>'
            f'{trs}</hp:tbl>')
     y = layout.place(height + 600)
     seg = (f'<hp:lineseg textpos="0" vertpos="{y}" vertsize="{height}" textheight="{height}" baseline="{height}" '
@@ -209,7 +212,8 @@ for i in range(8):
 paras.append(paragraph(layout, "2. 형식별 비교", 1))
 paras.append(table(layout, [("형식", "저장 방식", "비고"),
                             ("PPTX", "zip + XML", "절대 좌표"),
-                            ("HWPX", "zip + XML", "프로젝트 문서에 흔함")]))
+                            ("HWPX", "zip + XML", "프로젝트 문서에 흔함"),
+                            ("", "", "")]))
 # The text box floats to the right of its paragraph's first line.
 first_line = paragraph(layout, "(9) " + BODY)
 paras.append(first_line.replace('<hp:t>', text_box(14000, 4000, "글상자 안의 글", 1500, BODY_W - 14000) + '<hp:t>', 1))

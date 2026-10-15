@@ -99,4 +99,17 @@ class HwpxParserTest {
             }
         }
     }
+
+    @Test
+    fun `cells without margins of their own take the table's, and empty rows keep their height`() {
+        val table = HwpxParser.parse(sample("sample.hwpx")).pages.flatMap { it.elements }
+            .filterIsInstance<HwpxElement.Table>().single()
+        // hasMargin="0" with an unset <hp:cellMargin>: the table's 510 / 141.
+        val first = table.cells[0][0]!!.runs.first()
+        assertEquals(510L, first.xHu)
+        assertEquals(141L, first.yHu)
+        // The last row is empty: it is as tall as its cells declare.
+        assertEquals(4, table.rowHeightsHu.size)
+        assertTrue("${table.rowHeightsHu}", table.rowHeightsHu.last() >= 2000)
+    }
 }

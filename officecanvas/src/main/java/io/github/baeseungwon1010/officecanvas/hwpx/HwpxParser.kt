@@ -534,7 +534,12 @@ internal object HwpxParser {
             // relative to the cell's inner area; some writers start each paragraph
             // at 0 rather than below the previous one, and those are stacked.
             val subList = tc.child(HP, "subList")
-            val margin = tc.child(HP, "cellMargin")
+            // A cell without its own margins (hasMargin="0") takes the table's
+            // <hp:inMargin>, whatever its <hp:cellMargin> says (often stale, or
+            // 0xFFFFFFFF for "not set").
+            val own = tc.child(HP, "cellMargin")?.takeIf { tc.getAttribute("hasMargin") == "1" }
+            val margin = (own ?: tbl.child(HP, "inMargin") ?: tc.child(HP, "cellMargin"))
+                ?.takeIf { m -> listOf("left", "right", "top", "bottom").all { m.long(it) in 0..Int.MAX_VALUE } }
             var cursor = 0L
             val cellRuns = subList?.all(HP, "p").orEmpty().flatMap { cellP ->
                 val segs = cellP.child(HP, "linesegarray")?.all(HP, "lineseg").orEmpty()
