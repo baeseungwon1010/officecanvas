@@ -186,24 +186,25 @@ internal object PptxParser {
      * [decoration] is true for a master or layout: its placeholders are "click to add
      * title" prompts that are never shown themselves, only inherited from.
      */
-    private fun shapeTree(tree: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int = 0): List<Item> {
+    /** [groupFill]: the fill of the enclosing group, for shapes saying <a:grpFill/>. */
+    private fun shapeTree(tree: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int = 0, groupFill: Fill? = null): List<Item> {
         if (depth > Limits.MAX_NESTING) return emptyList()
         val out = mutableListOf<Item>()
         for (child in tree.children()) {
             when (child.localName) {
                 "sp", "cxnSp" -> {
                     val isPlaceholder = placeholderOf(child) != null
-                    if (!(decoration && isPlaceholder)) out += shape(child, NS_P, part, ctx)
+                    if (!(decoration && isPlaceholder)) out += shape(child, NS_P, part, ctx, groupFill = groupFill)
                 }
                 "pic" -> picture(child, part, ctx)?.let { out += it }
                 "graphicFrame" -> out += graphicFrame(child, part, ctx)
-                "grpSp" -> out += group(child, part, ctx, decoration, depth + 1)
+                "grpSp" -> out += group(child, part, ctx, decoration, depth + 1, groupFill)
                 // Newer content (equations, some 3-D models) comes with a fallback
                 // older readers understand, usually a picture of it.
                 "AlternateContent" -> {
                     val branch = child.child(NS_MC, "Fallback")?.takeIf { it.children().isNotEmpty() }
                         ?: child.child(NS_MC, "Choice")
-                    branch?.let { out += shapeTree(it, part, ctx, decoration, depth + 1) }
+                    branch?.let { out += shapeTree(it, part, ctx, decoration, depth + 1, groupFill) }
                 }
             }
         }
@@ -214,15 +215,47 @@ internal object PptxParser {
      * A group has a child-space rectangle (chOff/chExt) and a placed rectangle
      * (off/ext); its children are in child space and are mapped onto the placed one.
      */
-    private fun group(node: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int): List<Item> {
-        val children = shapeTree(node, part, ctx, decoration, depth)
+    private fun group(node: DomElement, part: String, ctx: SlideContext, decoration: Boolean, depth: Int, parentFill: Fill?): List<Item> {
+        // A group's own fill is what its members with <a:grpFill/> take (a group
+        // can pass on its parent's in turn).
+        val grpSpPr = node.child(NS_P, "grpSpPr")
+        val fill = if (grpSpPr?.child(NS_A, "grpFill") != null) parentFill else ctx.theme.fillIn(grpSpPr, part = part) ?: parentFill
+        val children = shapeTree(node, part, ctx, decoration, depth, fill)
         val xfrm = node.child(NS_P, "grpSpPr")?.child(NS_A, "xfrm") ?: return children
         val off = xfrm.child(NS_A, "off"); val ext = xfrm.child(NS_A, "ext")
         val chOff = xfrm.child(NS_A, "chOff"); val chExt = xfrm.child(NS_A, "chExt")
         if (off == null || ext == null || chOff == null || chExt == null) return children
         val sx = ext.long("cx").toDouble() / chExt.long("cx").coerceAtLeast(1)
         val sy = ext.long("cy").toDouble() / chExt.long("cy").coerceAtLeast(1)
-        return children.map { it.mapped(chOff.long("x"), chOff.long("y"), off.long("x"), off.long("y"), sx, sy) }
+        val placed = children.map { it.mapped(chOff.long("x"), chOff.long("y"), off.long("x"), off.long("y"), sx, sy) }
+        // The group's own flips and rotation turn its members about its center.
+        val rot = (xfrm.longOrNull("rot") ?: 0L) / 60000f
+        val flipH = xfrm.getAttribute("flipH") == "1"
+        val flipV = xfrm.getAttribute("flipV") == "1"
+        if (rot == 0f && !flipH && !flipV) return placed
+        val gx = off.long("x") + ext.long("cx") / 2.0
+        val gy = off.long("y") + ext.long("cy") / 2.0
+        return placed.map { it.turned(gx, gy, rot, flipH, flipV) }
+    }
+
+    /** [this] mirrored about (gx, gy) by [flipH]/[flipV], then turned [rot] degrees
+     *  (clockwise) about it: its box moves, and its own flips and rotation follow. */
+    private fun Item.turned(gx: Double, gy: Double, rot: Float, flipH: Boolean, flipV: Boolean): Item {
+        var cx = box.x + box.w / 2.0
+        var cy = box.y + box.h / 2.0
+        if (flipH) cx = 2 * gx - cx
+        if (flipV) cy = 2 * gy - cy
+        val r = Math.toRadians(rot.toDouble())
+        val dx = cx - gx; val dy = cy - gy
+        cx = gx + dx * kotlin.math.cos(r) - dy * kotlin.math.sin(r)
+        cy = gy + dx * kotlin.math.sin(r) + dy * kotlin.math.cos(r)
+        val moved = Box((cx - box.w / 2.0).toLong(), (cy - box.h / 2.0).toLong(), box.w, box.h)
+        fun turn(own: Float) = (if (flipH != flipV) -own else own) + rot
+        return when (this) {
+            is Item.Shape -> copy(box = moved, rotation = turn(rotation), flipH = this.flipH != flipH, flipV = this.flipV != flipV)
+            is Item.Picture -> copy(box = moved, rotation = turn(rotation))
+            is Item.Table -> copy(box = moved)
+        }
     }
 
     private fun placeholderOf(node: DomElement): DomElement? =
@@ -232,7 +265,7 @@ internal object PptxParser {
      * A shape or connector. [ns] is the namespace of its own wrapper elements: p for
      * slides, dsp for SmartArt drawings (whose children are otherwise DrawingML).
      */
-    private fun shape(node: DomElement, ns: String, part: String, ctx: SlideContext, origin: Box? = null): List<Item> {
+    private fun shape(node: DomElement, ns: String, part: String, ctx: SlideContext, origin: Box? = null, groupFill: Fill? = null): List<Item> {
         val theme = ctx.theme
         val spPr = node.child(ns, "spPr")
         val ph = if (ns == NS_P) placeholderOf(node) else null
@@ -251,7 +284,8 @@ internal object PptxParser {
             ?: Geometry.Result(if (node.localName == "cxnSp") "line" else "rect", null)
 
         val style = node.child(ns, "style") ?: inherited.firstNotNullOfOrNull { it.style }
-        val fill = theme.fillIn(spPr, part = part)
+        val fill = (if (spPr?.child(NS_A, "grpFill") != null) groupFill else null)
+            ?: theme.fillIn(spPr, part = part)
             ?: inherited.firstNotNullOfOrNull { theme.fillIn(it.spPr, part = it.part) }
             ?: theme.fillFromRef(style?.child(NS_A, "fillRef"), part)
             ?: Fill.None
