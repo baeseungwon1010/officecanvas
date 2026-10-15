@@ -109,7 +109,7 @@ Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, 3
 | Equations (Hangul's equation scripts, typeset again into their saved box) | ✓ | ✓ |
 | Objects set like characters in a line of text | ✓ | ✓ |
 | Pictures | inline and floating; crop | same |
-| Headers and footers (odd/even pages, changing mid-section), page numbers and the page number field | ✓ | ✓ |
+| Headers and footers (odd/even pages, changing mid-section), page numbers and the page number field, pages hiding them, numbering starting over | ✓ | ✓ |
 | Drawing objects: lines, rectangles, ellipses, polygons, groups, text boxes | ✓ (arcs and curves through their points) | ✓ |
 | Footnotes, charts, multiple columns | — | — |
 
