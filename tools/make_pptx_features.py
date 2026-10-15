@@ -13,7 +13,9 @@ tests check exactly (PptxParserTest, SlideRendererTest).
   6. pictures: a cropped PNG, an SVG-only icon, a picture inside
      mc:AlternateContent's fallback
   7. a table in PowerPoint's default style (stored by id only)
-  8. a hidden slide (skipped)
+  8. effects: a hard outer shadow, an empty effect list overriding the style's
+     theme shadow, white text on a highlight
+  9. a hidden slide (skipped)
 Run: python3 make_pptx_features.py <outdir>, or tools/build_fixtures.sh"""
 import copy
 import io
@@ -147,7 +149,27 @@ for r in range(3):
     for c in range(2):
         table.cell(r, c).text = f"r{r}c{c}"
 
-# 8: hidden slide
+# 8: effects: an explicit hard shadow down and to the right, an empty effect list
+# (no shadow, despite the style's effect reference), highlighted text
+s = prs.slides.add_slide(blank)
+for x in (1, 5.5):
+    sh = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(1), Inches(3), Inches(2))
+    sh.fill.solid()
+    sh.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    sh.line.fill.background()
+    effects = etree.SubElement(sh._element.spPr, qn("a:effectLst"))
+    if x == 1:
+        shadow = etree.SubElement(effects, qn("a:outerShdw"), blurRad="0", dist="152400", dir="2700000", rotWithShape="0")
+        etree.SubElement(shadow, qn("a:srgbClr"), val="000000")
+tf = s.shapes.add_textbox(Inches(1), Inches(4.5), Inches(8), Inches(1)).text_frame
+run = tf.paragraphs[0].add_run()
+run.text = "highlighted"
+run.font.size = Pt(40)
+run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+hl = etree.SubElement(run._r.get_or_add_rPr(), qn("a:highlight"))
+etree.SubElement(hl, qn("a:srgbClr"), val="FFC000")
+
+# 9: hidden slide
 s = prs.slides.add_slide(blank)
 s.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text_frame.text = "Hidden"
 s._element.set("show", "0")

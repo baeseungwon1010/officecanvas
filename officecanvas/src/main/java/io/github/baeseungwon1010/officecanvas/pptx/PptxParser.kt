@@ -270,6 +270,12 @@ internal object PptxParser {
         fun arrow(end: String) = (lnSources + listOfNotNull(refLine)).firstNotNullOfOrNull { it.child(NS_A, end)?.attr("type") }
             ?.let { it != "none" } ?: false
 
+        // Effects: the shape's own list (an empty one means none), else its
+        // placeholder's, else the theme effect style its style points at.
+        val effects = (listOfNotNull(spPr) + inherited.mapNotNull { it.spPr }).firstNotNullOfOrNull { it.child(NS_A, "effectLst") }
+            ?: style?.child(NS_A, "effectRef")?.getAttribute("idx")?.toIntOrNull()?.let { theme.effectStyle(it) }
+        val shadow = theme.shadowOf(effects, theme.colorIn(style?.child(NS_A, "effectRef")))
+
         val fontRef = style?.child(NS_A, "fontRef")
         val textNode = node.child(ns, "txBody")
         val chain = if (phType != null) {
@@ -301,7 +307,8 @@ internal object PptxParser {
             tailArrow = arrow("tailEnd"),
             dashed = dash != null && dash != "solid",
             outline = geom.outline,
-            gradient = if (geom.open) null else (fill as? Fill.Shaded)?.gradient
+            gradient = if (geom.open) null else (fill as? Fill.Shaded)?.gradient,
+            shadow = shadow
         )
         if (txXfrm != null && text != null) {
             out += Item.Shape(txXfrm, null, null, null, 0, text, rotation = rotationOf(spPr))
@@ -327,7 +334,9 @@ internal object PptxParser {
             fun f(a: String) = (r.longOrNull(a) ?: 0L) / 100000f
             Crop(f("l"), f("t"), f("r"), f("b")).takeIf { it.left != 0f || it.top != 0f || it.right != 0f || it.bottom != 0f }
         }
-        return Item.Picture(box = box, imageEntry = target, rotation = spPr?.let { rotationOf(it) } ?: 0f, crop = crop)
+        val shadow = ctx.theme.shadowOf(spPr?.child(NS_A, "effectLst")
+            ?: node.child(NS_P, "style")?.child(NS_A, "effectRef")?.getAttribute("idx")?.toIntOrNull()?.let { ctx.theme.effectStyle(it) })
+        return Item.Picture(box = box, imageEntry = target, rotation = spPr?.let { rotationOf(it) } ?: 0f, crop = crop, shadow = shadow)
     }
 
     private fun graphicFrame(node: DomElement, part: String, ctx: SlideContext): List<Item> {
@@ -512,8 +521,8 @@ internal object PptxParser {
     private fun Item.mapped(cx: Long, cy: Long, gx: Long, gy: Long, sx: Double, sy: Double): Item {
         fun map(b: Box) = Box(gx + ((b.x - cx) * sx).toLong(), gy + ((b.y - cy) * sy).toLong(), (b.w * sx).toLong(), (b.h * sy).toLong())
         return when (this) {
-            is Item.Shape -> copy(box = map(box))
-            is Item.Picture -> copy(box = map(box))
+            is Item.Shape -> copy(box = map(box), shadow = shadow?.let { it.copy(dxEmu = (it.dxEmu * sx).toLong(), dyEmu = (it.dyEmu * sy).toLong()) })
+            is Item.Picture -> copy(box = map(box), shadow = shadow?.let { it.copy(dxEmu = (it.dxEmu * sx).toLong(), dyEmu = (it.dyEmu * sy).toLong()) })
             is Item.Table -> copy(box = map(box))
         }
     }

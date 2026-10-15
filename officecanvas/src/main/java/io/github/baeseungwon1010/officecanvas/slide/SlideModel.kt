@@ -54,7 +54,8 @@ internal sealed class Element {
          *  presets); when set it replaces [geometry] for fill and stroke. */
         val outline: List<PathOp>? = null,
         /** Replaces [fillArgb] when set. */
-        val gradient: Gradient? = null
+        val gradient: Gradient? = null,
+        val shadow: Shadow? = null
     ) : Element()
 
     data class Picture(
@@ -74,7 +75,8 @@ internal sealed class Element {
         /** A placeable WMF vector picture; drawn by metafile/WmfRenderer. */
         val wmfBytes: ByteArray? = null,
         /** Fractions of the source image trimmed from each edge (negative = padding). */
-        val crop: Crop? = null
+        val crop: Crop? = null,
+        val shadow: Shadow? = null
     ) : Element()
 
     data class Table(
@@ -108,6 +110,10 @@ internal data class Gradient(
     val centerX: Float = 0.5f,
     val centerY: Float = 0.5f
 )
+
+/** An outer shadow: the shape's silhouette in [argb] (with its alpha), offset by
+ *  ([dxEmu], [dyEmu]) and blurred over [blurEmu]. */
+internal data class Shadow(val argb: Int, val dxEmu: Long, val dyEmu: Long, val blurEmu: Long)
 
 internal data class Crop(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
@@ -165,5 +171,7 @@ internal data class Run(
     val colorArgb: Int = 0xFF000000.toInt(),
     val fontFamily: String? = null,
     /** Superscript (> 0) / subscript (< 0) offset as a percent of the line height. */
-    val baselinePercent: Float = 0f
+    val baselinePercent: Float = 0f,
+    /** Text highlight (a marker-pen background behind the run), if any. */
+    val highlightArgb: Int? = null
 )

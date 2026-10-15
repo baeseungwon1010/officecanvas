@@ -23,7 +23,7 @@ class PptxFeatureTest {
 
     @Test
     fun `the hidden slide is left out`() {
-        assertEquals(7, deck.slides.size)
+        assertEquals(8, deck.slides.size)
     }
 
     @Test
@@ -35,6 +35,28 @@ class PptxFeatureTest {
         for (c in g!!.colors) { val (r, _, b) = rgb(c); assertTrue("accent1 shades are blue: ${Integer.toHexString(c)}", b > r) }
         // lnRef idx 1: the theme's first line style, accent1 at shade 95% / satMod 105%.
         assertEquals(0xFF4A7EBB.toInt(), styled.strokeArgb)
+    }
+
+    @Test
+    fun `shadows come from the shape's effect list or its style's theme effect`() {
+        // The default style points at the theme's second effect style: 35% black, 23000 EMU down.
+        val themed = shapes(0)[0].shadow!!
+        assertEquals(0x59, themed.argb ushr 24)
+        assertEquals(0L, themed.dxEmu)
+        assertEquals(23000L, themed.dyEmu)
+        // An explicit shadow: 152400 EMU at 45 degrees, no blur.
+        val own = shapes(7)[0].shadow!!
+        assertEquals(107763.0, own.dxEmu.toDouble(), 2.0)
+        assertEquals(107763.0, own.dyEmu.toDouble(), 2.0)
+        assertEquals(0L, own.blurEmu)
+        // An empty <a:effectLst> means no effects, whatever the style says.
+        assertNull(shapes(7)[1].shadow)
+    }
+
+    @Test
+    fun `highlighted runs keep their highlight color`() {
+        val run = shapes(7).mapNotNull { it.text }.flatMap { it.paragraphs }.flatMap { it.runs }.single { it.text == "highlighted" }
+        assertEquals(0xFFFFC000.toInt(), run.highlightArgb)
     }
 
     @Test

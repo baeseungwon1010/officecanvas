@@ -1,6 +1,7 @@
 package io.github.baeseungwon1010.officecanvas.pptx
 
 import io.github.baeseungwon1010.officecanvas.slide.Gradient
+import io.github.baeseungwon1010.officecanvas.slide.Shadow
 import org.w3c.dom.Element
 import java.util.zip.ZipFile
 import kotlin.math.abs
@@ -26,12 +27,13 @@ internal class Theme(
     val minorEa: String?,
     private val fillStyles: List<Element>,
     private val lineStyles: List<Element>,
-    private val bgFillStyles: List<Element>
+    private val bgFillStyles: List<Element>,
+    private val effectStyles: List<Element> = emptyList()
 ) {
     fun scheme(name: String): Int? = colors[colorMap[name] ?: DEFAULT_MAP[name] ?: name]
 
     fun withColorMap(map: Map<String, String>) =
-        Theme(colors, map, majorLatin, minorLatin, majorEa, minorEa, fillStyles, lineStyles, bgFillStyles)
+        Theme(colors, map, majorLatin, minorLatin, majorEa, minorEa, fillStyles, lineStyles, bgFillStyles, effectStyles)
 
     /** "+mj-lt" and friends name the theme's fonts rather than a font. */
     fun font(typeface: String?): String? = when (typeface) {
@@ -51,6 +53,9 @@ internal class Theme(
     }
 
     fun lineStyle(idx: Int): Element? = lineStyles.getOrNull(idx - 1)
+
+    /** An <a:effectStyle>'s effect list; idx 0 is none. */
+    fun effectStyle(idx: Int): Element? = effectStyles.getOrNull(idx - 1)?.child(NS_A, "effectLst")
 
     companion object {
         val DEFAULT_MAP = mapOf("bg1" to "lt1", "tx1" to "dk1", "bg2" to "lt2", "tx2" to "dk2")
@@ -72,7 +77,7 @@ internal class Theme(
                 colors, DEFAULT_MAP,
                 face("majorFont", "latin"), face("minorFont", "latin"),
                 face("majorFont", "ea"), face("minorFont", "ea"),
-                list("fillStyleLst"), list("lnStyleLst"), list("bgFillStyleLst")
+                list("fillStyleLst"), list("lnStyleLst"), list("bgFillStyleLst"), list("effectStyleLst")
             )
         }
 
@@ -111,6 +116,18 @@ internal fun Theme.colorIn(holder: Element?, placeholder: Int? = null): Int? {
         return applyModifiers(base, node)
     }
     return null
+}
+
+/** The outer shadow in an <a:effectLst>: blur radius, distance and direction (in
+ *  1/60000 degree, clockwise from the right) and its color. [placeholder] stands
+ *  in for `phClr` (the effect reference's color). */
+internal fun Theme.shadowOf(effects: Element?, placeholder: Int? = null): Shadow? {
+    val s = effects?.child(NS_A, "outerShdw") ?: return null
+    val color = colorIn(s, placeholder) ?: return null
+    if (color ushr 24 == 0) return null
+    val dist = s.long("dist").coerceIn(0, 2_000_000)
+    val dir = Math.toRadians(s.long("dir") / 60000.0)
+    return Shadow(color, (dist * kotlin.math.cos(dir)).toLong(), (dist * kotlin.math.sin(dir)).toLong(), s.long("blurRad").coerceIn(0, 2_000_000))
 }
 
 /** A shape's or background's fill: a solid color, a gradient, or nothing. */

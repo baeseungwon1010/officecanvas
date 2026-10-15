@@ -116,6 +116,21 @@ internal object SlideRenderer {
         }
         if (rect.width() <= 0f || rect.height() <= 0f) return
 
+        val filled = shape.fillArgb != null || shape.gradient != null
+        shape.shadow?.takeIf { filled || strokePaint(shape, scale) != null }?.let { s ->
+            drawShadow(canvas, s, scale) { paint ->
+                canvas.withRotation(shape.rotation, rect) {
+                    canvas.save()
+                    if (shape.flipH || shape.flipV) canvas.scale(if (shape.flipH) -1f else 1f, if (shape.flipV) -1f else 1f, rect.centerX(), rect.centerY())
+                    // The silhouette: the filled outline, or just the line when there is no fill.
+                    if (!filled) strokePaint(shape, scale)?.let { paint.style = Paint.Style.STROKE; paint.strokeWidth = it.strokeWidth }
+                    val outline = shape.outline?.let { outlinePath(it, rect) }
+                    if (outline != null) canvas.drawPath(outline, paint) else drawGeometry(canvas, shape.geometry, rect, paint)
+                    canvas.restore()
+                }
+            }
+        }
+
         canvas.withRotation(shape.rotation, rect) {
             canvas.save()
             // Flips mirror the outline (and its gradient) within the box; text is not mirrored.
@@ -141,6 +156,24 @@ internal object SlideRenderer {
             canvas.restore()
         }
         shape.text?.let { drawText(canvas, it, rect, scale, shape.rotation) }
+    }
+
+    /**
+     * An outer shadow: [silhouette] drawn with a paint in the shadow's color, moved
+     * by its offset (which doesn't turn with the shape) and blurred. Drawn before
+     * the shape itself, so the shape covers all but the offset part.
+     */
+    private fun drawShadow(canvas: Canvas, shadow: Shadow, scale: Double, silhouette: (Paint) -> Unit) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = shadow.argb
+            style = Paint.Style.FILL
+            // PowerPoint's blur radius spreads the edge over about twice a Gaussian sigma.
+            val radius = (shadow.blurEmu * scale / 2).toFloat().coerceAtMost(200f)
+            if (radius >= 0.5f) maskFilter = android.graphics.BlurMaskFilter(radius, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        }
+        canvas.save()
+        canvas.translate((shadow.dxEmu * scale).toFloat(), (shadow.dyEmu * scale).toFloat())
+        try { silhouette(paint) } finally { canvas.restore() }
     }
 
     private fun strokePaint(shape: Element.Shape, scale: Double): Paint? {
@@ -323,6 +356,9 @@ internal object SlideRenderer {
             val fullH = box.height() / keptH
             RectF(box.left - c.left * fullW, box.top - c.top * fullH, box.left - c.left * fullW + fullW, box.top - c.top * fullH + fullH)
         } ?: box
+        picture.shadow?.let { s ->
+            drawShadow(canvas, s, scale) { paint -> canvas.withRotation(picture.rotation, box) { canvas.drawRect(box, paint) } }
+        }
         canvas.save()
         if (picture.rotation != 0f) canvas.rotate(picture.rotation, box.centerX(), box.centerY())
         if (picture.crop != null) canvas.clipRect(box)
@@ -561,6 +597,7 @@ internal object SlideRenderer {
             val sizePx = ptToPx(run.sizePt, scale, shrink).coerceAtLeast(1f)
             spannable.setSpan(SizeSpan(sizePx), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(android.text.style.ForegroundColorSpan(run.colorArgb), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            run.highlightArgb?.let { spannable.setSpan(android.text.style.BackgroundColorSpan(it), start, end, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE) }
             val kind = fonts?.let { OfficeFonts.kindFor(run.fontFamily) }
             val face = kind?.let { fonts?.typeface(it, run.bold, run.italic) }
             // A loaded bold/italic font file already is the style; StyleSpan is only

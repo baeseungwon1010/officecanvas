@@ -88,6 +88,25 @@ class SlideRendererTest {
         near(800, 200, 0xFFFFA000.toInt())   // picture from mc:Fallback
     }
 
+    @Test
+    fun `draws shadows under shapes and highlights behind text`() {
+        val file = sample("pptx_features.pptx")
+        val deck = PptxParser.parse(file)
+        var slide: Bitmap? = null
+        // 10in wide at 1000px: 100px per inch.
+        SlideRenderer.render(deck.copy(slides = listOf(deck.slides[7])), file, targetLongSidePx = 1000) { _, bmp -> slide = bmp }
+        val bmp = slide!!
+        savePng(bmp, "pptx_features_effects.png")
+        fun luma(x: Int, y: Int) = bmp.getPixel(x, y).let { ((it shr 16) and 0xFF) + ((it shr 8) and 0xFF) + (it and 0xFF) } / 3
+        // The first box (1..4in, 1..3in) casts a hard black shadow ~11px down and right;
+        // the second (5.5..8.5in) has none.
+        org.junit.Assert.assertTrue("shadow under the first box: ${luma(405, 305)}", luma(405, 305) < 60)
+        org.junit.Assert.assertTrue("no shadow under the second: ${luma(855, 305)}", luma(855, 305) > 200)
+        // White text on an amber highlight: the line's background is amber, not white.
+        val amber = (0 until 400).count { x -> bmp.getPixel(110 + x, 500).let { p -> (p shr 16 and 0xFF) > 200 && (p and 0xFF) < 80 } }
+        org.junit.Assert.assertTrue("highlight pixels: $amber", amber > 50)
+    }
+
     private fun sampleDistinctColors(bmp: Bitmap): Int {
         val seen = HashSet<Int>()
         val stepX = maxOf(1, bmp.width / 60)
