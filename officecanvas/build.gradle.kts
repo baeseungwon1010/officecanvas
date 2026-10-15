@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "io.github.baeseungwon1010"
-version = "0.4.0"
+version = "0.5.0"
 
 android {
     namespace = "io.github.baeseungwon1010.officecanvas"
