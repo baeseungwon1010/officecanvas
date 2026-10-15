@@ -79,11 +79,13 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Bullets | ✓ | ✓ incl. symbol-font bullets |
 | Automatic numbering (1. a. i. …) | ✓ | ✓ |
 | Superscript / subscript | ✓ | ✓ |
+| Text highlight | ✓ | — |
 | Shrink text on overflow | the scale PowerPoint saved | estimated |
 | Shape fill and outline | ✓ | ✓ |
 | Lines, connectors, arrowheads, flipped shapes | ✓ (straight, elbow, curved) | ✓ |
 | Shape outlines | ~65 presets + freeforms | freeforms + common presets |
 | Gradient fills | linear, radial, rectangular | linear, axial, radial, rectangular |
+| Outer shadows | ✓ (shapes and pictures, incl. theme effect styles) | — |
 | Tables | ✓ incl. table styles | as the shapes PowerPoint stores |
 | SmartArt | from the drawing PowerPoint saves with it | — |
 | Charts | bar and column (clustered, stacked, 100%), line, area, pie, doughnut, from the values cached in the chart part; title, legend, axis and value labels | — |
@@ -91,7 +93,7 @@ Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bu
 | Slide background | solid, gradient, picture | solid, picture, gradient |
 | Hidden slides | skipped | skipped, as PowerPoint's own export does |
 
-Not rendered: scatter, radar and 3-D charts, shadows, glow, 3-D effects, text highlight, animations, video, embedded OLE objects other than their preview picture.
+Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, 3-D effects, text shadows, animations, video, embedded OLE objects other than their preview picture.
 
 ### Hangul documents
 
