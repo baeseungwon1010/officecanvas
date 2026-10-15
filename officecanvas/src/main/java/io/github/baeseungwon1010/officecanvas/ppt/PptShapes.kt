@@ -5,6 +5,7 @@ import io.github.baeseungwon1010.officecanvas.metafile.WmfRenderer
 import io.github.baeseungwon1010.officecanvas.slide.Box
 import io.github.baeseungwon1010.officecanvas.slide.Crop
 import io.github.baeseungwon1010.officecanvas.slide.Gradient
+import io.github.baeseungwon1010.officecanvas.slide.PictureData
 import io.github.baeseungwon1010.officecanvas.slide.Element
 import io.github.baeseungwon1010.officecanvas.slide.TextBody
 import io.github.baeseungwon1010.officecanvas.slide.VAnchor
@@ -140,39 +141,53 @@ internal class ShapeProps(
     }
 }
 
-/** A picture from the blip store: raster bytes BitmapFactory can decode, or an EMF. */
-internal class Blip(val bytes: ByteArray, val kind: Kind) {
-    enum class Kind { RASTER, EMF, WMF }
-
-    fun toPicture(box: Box, rotation: Float = 0f, crop: Crop? = null) = when (kind) {
-        Kind.EMF -> Element.Picture(box = box, emfBytes = bytes, rotation = rotation, crop = crop)
-        Kind.WMF -> Element.Picture(box = box, wmfBytes = bytes, rotation = rotation, crop = crop)
-        Kind.RASTER -> Element.Picture(box = box, imageBytes = bytes, rotation = rotation, crop = crop)
-    }
+/** A picture from the blip store, read from the file only when drawn. */
+internal class Blip(val data: PictureData) {
+    fun toPicture(box: Box, rotation: Float = 0f, crop: Crop? = null) =
+        Element.Picture(box = box, data = data, rotation = rotation, crop = crop)
 }
 
 /** Pictures: a 1-based "pib" index into the drawing group's blip store, whose
- *  entries point at blip records in the separate "Pictures" stream. */
-internal class BlipStore(private val pictures: RecordReader?, private val offsets: List<Int>) {
-    // Each picture is extracted once, however many shapes use it, and the bytes
-    // extracted for one deck are budgeted: a small deflate bomb referenced by many
-    // shapes would otherwise inflate again for each.
+ *  entries point at blip records in the separate "Pictures" stream. Only a
+ *  record's 8-byte header is read while parsing; [read] fetches a part of the
+ *  stream when the picture is drawn, so the deck's pictures aren't held in
+ *  memory together. */
+internal class BlipStore(private val read: ((offset: Long, length: Int) -> ByteArray?)?, private val offsets: List<Int>) {
     private val cache = HashMap<Int, Blip?>()
-    private var budget = MAX_TOTAL_BYTES
 
-    fun blip(pib: Int): Blip? = cache.getOrPut(pib) {
-        extract(pib)?.takeIf { it.bytes.size <= budget }?.also { budget -= it.bytes.size }
+    fun blip(pib: Int): Blip? = cache.getOrPut(pib) { describe(pib) }
+
+    private fun describe(pib: Int): Blip? {
+        val read = read ?: return null
+        val offset = offsets.getOrNull(pib - 1)?.toLong()?.takeIf { it >= 0 } ?: return null
+        val head = read(offset, 8)?.takeIf { it.size == 8 } ?: return null
+        val r = RecordReader(head)
+        val type = r.u16(2)
+        val length = r.i32(4)
+        if (length !in 0..MAX_BLIP_BYTES) return null
+        val kind = when (type) {
+            RT.BLIP_JPEG, RT.BLIP_JPEG_CMYK, RT.BLIP_PNG, RT.BLIP_DIB, RT.BLIP_TIFF, RT.BLIP_PICT -> PictureData.Kind.RASTER
+            RT.BLIP_EMF -> PictureData.Kind.EMF
+            RT.BLIP_WMF -> PictureData.Kind.WMF
+            else -> return null
+        }
+        return Blip(PictureData(kind) {
+            try {
+                read(offset, 8 + length)?.let { extract(RecordReader(it)) }
+            } catch (e: java.io.IOException) {
+                null // the file was closed or can't be read any more
+            }
+        })
     }
 
-    private fun extract(pib: Int): Blip? {
-        val r = pictures ?: return null
-        val offset = offsets.getOrNull(pib - 1) ?: return null
-        val rec = r.record(offset) ?: return null
+    /** The picture in the blip record at the start of [r]. */
+    private fun extract(r: RecordReader): ByteArray? {
+        val rec = r.record(0) ?: return null
         return when (rec.type) {
             RT.BLIP_JPEG, RT.BLIP_JPEG_CMYK -> raster(r, rec, JPEG_MAGIC)
             RT.BLIP_PNG -> raster(r, rec, PNG_MAGIC)
-            RT.BLIP_EMF -> metafile(r, rec, Blip.Kind.EMF)
-            RT.BLIP_WMF -> metafile(r, rec, Blip.Kind.WMF)
+            RT.BLIP_EMF -> metafile(r, rec, true)
+            RT.BLIP_WMF -> metafile(r, rec, false)
             RT.BLIP_DIB -> dib(r, rec)
             RT.BLIP_TIFF -> tiff(r, rec)
             RT.BLIP_PICT -> pict(r, rec)
@@ -182,10 +197,10 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
 
     /** One or two 16-byte GUIDs and sometimes a tag byte precede the image;
      *  finding the format's magic is simpler than decoding which are present. */
-    private fun raster(r: RecordReader, rec: Rec, magic: ByteArray): Blip? {
+    private fun raster(r: RecordReader, rec: Rec, magic: ByteArray): ByteArray? {
         val searchEnd = minOf(rec.start + 40, rec.end - magic.size)
         for (start in rec.start..searchEnd) {
-            if (magic.indices.all { r.data[start + it] == magic[it] }) return Blip(r.data.copyOfRange(start, rec.end), Blip.Kind.RASTER)
+            if (magic.indices.all { r.data[start + it] == magic[it] }) return r.data.copyOfRange(start, rec.end)
         }
         return null
     }
@@ -193,8 +208,8 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
     /** Metafile blips (MS-ODRAW 2.2.24): GUID (a second one for instance 0x3D5),
      *  a 34-byte header ending in cbSave and a compression flag, then the data,
      *  usually deflated. */
-    private fun metafile(r: RecordReader, rec: Rec, kind: Blip.Kind, secondGuidInstance: Int? = null): Blip? {
-        val secondGuid = rec.instance == (secondGuidInstance ?: if (kind == Blip.Kind.EMF) 0x3D5 else 0x217)
+    private fun metafile(r: RecordReader, rec: Rec, emf: Boolean, secondGuidInstance: Int? = null, wmf: Boolean = !emf): ByteArray? {
+        val secondGuid = rec.instance == (secondGuidInstance ?: if (emf) 0x3D5 else 0x217)
         val header = rec.start + if (secondGuid) 32 else 16
         if (header + 34 > rec.end) return null
         val uncompressed = r.i32(header)
@@ -205,8 +220,8 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
         if (dataEnd <= dataStart) return null
         // The header's rcBounds (left, top, right, bottom) is the WMF's only extent; EMF carries its own.
         fun wrap(bytes: ByteArray) =
-            if (kind == Blip.Kind.WMF) WmfRenderer.placeable(bytes, r.i32(header + 4), r.i32(header + 8), r.i32(header + 12), r.i32(header + 16)) else bytes
-        if (!compressed) return Blip(wrap(r.data.copyOfRange(dataStart, dataEnd)), kind)
+            if (wmf) WmfRenderer.placeable(bytes, r.i32(header + 4), r.i32(header + 8), r.i32(header + 12), r.i32(header + 16)) else bytes
+        if (!compressed) return wrap(r.data.copyOfRange(dataStart, dataEnd))
         if (uncompressed !in 1..SafeBitmaps.MAX_IMAGE_BYTES) return null
         val out = ByteArray(uncompressed)
         val inflater = java.util.zip.Inflater()
@@ -218,7 +233,7 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
                 if (got == 0 && (inflater.needsInput() || inflater.needsDictionary())) break
                 n += got
             }
-            Blip(wrap(if (n == out.size) out else out.copyOf(n)), kind)
+            wrap(if (n == out.size) out else out.copyOf(n))
         } catch (e: java.util.zip.DataFormatException) {
             null
         } finally {
@@ -227,18 +242,17 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
     }
 
     /** A device-independent bitmap blip (MS-ODRAW 2.2.31): GUID(s), a tag byte, then a bare DIB — wrapped into a BMP so BitmapFactory reads it. */
-    private fun dib(r: RecordReader, rec: Rec): Blip? {
+    private fun dib(r: RecordReader, rec: Rec): ByteArray? {
         val start = rec.start + (if (rec.instance == 0x7A9) 32 else 16) + 1
         if (start + 40 > rec.end) return null
-        val bmp = WmfRenderer.dibToBmp(r.data.copyOfRange(start, rec.end)) ?: return null
-        return Blip(bmp, Blip.Kind.RASTER)
+        return WmfRenderer.dibToBmp(r.data.copyOfRange(start, rec.end))
     }
 
     /** TIFF blip: GUID(s), a tag byte, then the TIFF file — converted to BMP. */
-    private fun tiff(r: RecordReader, rec: Rec): Blip? {
+    private fun tiff(r: RecordReader, rec: Rec): ByteArray? {
         val start = rec.start + (if (rec.instance == 0x6E5) 32 else 16) + 1
         if (start + 8 > rec.end) return null
-        return TiffDecoder.toBmp(r.data.copyOfRange(start, rec.end))?.let { Blip(it, Blip.Kind.RASTER) }
+        return TiffDecoder.toBmp(r.data.copyOfRange(start, rec.end))
     }
 
     /**
@@ -246,11 +260,11 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
      * out of reach, but PICTs from Office are nearly always a wrapper around a
      * QuickTime-compressed JPEG (or PNG), which is recovered as-is.
      */
-    private fun pict(r: RecordReader, rec: Rec): Blip? {
-        val data = metafile(r, rec, Blip.Kind.RASTER, secondGuidInstance = 0x543)?.bytes ?: return null
+    private fun pict(r: RecordReader, rec: Rec): ByteArray? {
+        val data = metafile(r, rec, emf = false, secondGuidInstance = 0x543, wmf = false) ?: return null
         for (magic in listOf(JPEG_MAGIC, PNG_MAGIC)) {
             for (i in 0..data.size - magic.size) {
-                if (magic.indices.all { data[i + it] == magic[it] }) return Blip(data.copyOfRange(i, data.size), Blip.Kind.RASTER)
+                if (magic.indices.all { data[i + it] == magic[it] }) return data.copyOfRange(i, data.size)
             }
         }
         return null
@@ -261,8 +275,8 @@ internal class BlipStore(private val pictures: RecordReader?, private val offset
         private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
         val EMPTY = BlipStore(null, emptyList())
 
-        /** Picture bytes extracted from one deck, in total. */
-        private const val MAX_TOTAL_BYTES = 256 shl 20
+        /** A blip record larger than this isn't read. */
+        private const val MAX_BLIP_BYTES = SafeBitmaps.MAX_IMAGE_BYTES + 4096
     }
 }
 

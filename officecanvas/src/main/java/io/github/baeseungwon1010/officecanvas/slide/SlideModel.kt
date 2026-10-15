@@ -19,7 +19,10 @@ internal const val EMU_PER_POINT = 12700.0
 internal data class Deck(
     val widthEmu: Long,
     val heightEmu: Long,
-    val slides: List<Slide>
+    val slides: List<Slide>,
+    /** The open file the slides' pictures are read from as they are drawn (a
+     *  .ppt's); whoever renders the deck closes it afterwards. */
+    val resources: java.io.Closeable? = null
 ) {
     val aspect: Double get() = widthEmu.toDouble() / heightEmu.toDouble()
 }
@@ -62,19 +65,13 @@ internal sealed class Element {
     data class Picture(
         override val box: Box,
         /** Entry name inside the .pptx zip, e.g. "ppt/media/image3.png". Null when
-         *  the source isn't a zip at all and [imageBytes] is used instead — a
-         *  legacy .ppt stores images in a separate OLE2 stream, not zip entries
-         *  (see ppt/PptParser). Exactly one of the two is set. */
+         *  the source isn't a zip at all and [data] is used instead — a legacy
+         *  .ppt stores images in a separate OLE2 stream, not zip entries (see
+         *  ppt/PptParser). Exactly one of the two is set. */
         val imageEntry: String? = null,
-        /** Already-decodable image bytes (JPEG/PNG), used instead of [imageEntry]
-         *  when there is no zip to look an entry up in. */
-        val imageBytes: ByteArray? = null,
+        /** A picture read from the document only when it is drawn. */
+        val data: PictureData? = null,
         val rotation: Float = 0f,
-        /** An EMF vector picture (BitmapFactory can't decode those); drawn by
-         *  metafile/EmfRenderer instead of [imageBytes]. */
-        val emfBytes: ByteArray? = null,
-        /** A placeable WMF vector picture; drawn by metafile/WmfRenderer. */
-        val wmfBytes: ByteArray? = null,
         /** Fractions of the source image trimmed from each edge (negative = padding). */
         val crop: Crop? = null,
         val shadow: Shadow? = null,
@@ -127,6 +124,15 @@ internal data class Scene3d(
 /** An outer shadow: the shape's silhouette in [argb] (with its alpha), offset by
  *  ([dxEmu], [dyEmu]) and blurred over [blurEmu]. */
 internal data class Shadow(val argb: Int, val dxEmu: Long, val dyEmu: Long, val blurEmu: Long)
+
+/**
+ * Picture bytes left in the file until drawn, so a deck's pictures aren't all in
+ * memory at once: raster bytes BitmapFactory can decode, an EMF, or a placeable
+ * WMF. [load] returns null when they can't be read.
+ */
+internal class PictureData(val kind: Kind, val load: () -> ByteArray?) {
+    enum class Kind { RASTER, EMF, WMF }
+}
 
 internal data class Crop(val left: Float, val top: Float, val right: Float, val bottom: Float)
 

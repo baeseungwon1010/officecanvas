@@ -69,7 +69,11 @@ object OfficeCanvas {
             when (kind) {
                 DocumentFormat.PPTX, DocumentFormat.PPT -> {
                     val deck = if (kind == DocumentFormat.PPTX) PptxParser.parse(file) else PptParser.parse(file)
-                    SlideRenderer.render(deck, file, longSidePx, counting)
+                    try {
+                        SlideRenderer.render(deck, file, longSidePx, counting)
+                    } finally {
+                        deck.resources?.close()
+                    }
                 }
                 DocumentFormat.HWPX -> HwpxRenderer.render(HwpxParser.parse(file), file, longSidePx, counting)
                 DocumentFormat.HWP -> HwpxRenderer.render(

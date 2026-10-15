@@ -206,6 +206,36 @@ internal class Ole2Reader private constructor(private val channel: FileChannel) 
         }
     }
 
+    /** Up to [length] bytes of a stream from [offset] on, reading only the sectors
+     *  they lie in; null if the stream doesn't exist. */
+    fun readStream(name: String, offset: Long, length: Int): ByteArray? {
+        val entry = paths[name] ?: streams[name] ?: return null
+        if (offset < 0 || length <= 0 || offset >= entry.size) return ByteArray(0)
+        val n = minOf(length.toLong(), entry.size - offset).toInt()
+        if (entry.size < miniStreamCutoff) return readMiniChain(entry.firstSector, entry.size).let { it.copyOfRange(minOf(offset.toInt(), it.size), minOf((offset + n).toInt(), it.size)) }
+        // Walk the chain to the sector holding [offset], then read on from there.
+        val skip = offset / sectorSize
+        var sector = entry.firstSector
+        val seen = java.util.BitSet()
+        var k = 0L
+        while (k < skip && sector in 0 until sectorCount && !seen[sector]) {
+            seen.set(sector)
+            sector = if (sector < fat.size) fat[sector] else ENDOFCHAIN
+            k++
+        }
+        if (k < skip || sector !in 0 until sectorCount) return ByteArray(0)
+        val within = (offset % sectorSize).toInt()
+        val chain = ArrayList<Int>()
+        val needed = (within + n + sectorSize - 1) / sectorSize
+        while (chain.size < needed && sector in 0 until sectorCount && !seen[sector]) {
+            seen.set(sector)
+            chain += sector
+            sector = if (sector < fat.size) fat[sector] else ENDOFCHAIN
+        }
+        val all = readSectors(chain)
+        return all.copyOfRange(minOf(within, all.size), minOf(within + n, all.size))
+    }
+
     /** Sector n follows the header, which takes one sector's worth of space. */
     private fun sectorOffset(sector: Int): Long = (sector + 1).toLong() * sectorSize
 
@@ -224,6 +254,12 @@ internal class Ole2Reader private constructor(private val channel: FileChannel) 
             chain += sector
             sector = if (sector < fat.size) fat[sector] else ENDOFCHAIN
         }
+        val all = readSectors(chain)
+        return if (knownSize in 0..all.size.toLong()) all.copyOf(knownSize.toInt()) else all
+    }
+
+    /** The sectors in [chain], in order; consecutive ones in one read. */
+    private fun readSectors(chain: List<Int>): ByteArray {
         val all = ByteArray(chain.size * sectorSize)
         var i = 0
         while (i < chain.size) {
@@ -233,7 +269,7 @@ internal class Ole2Reader private constructor(private val channel: FileChannel) 
             piece.copyInto(all, i * sectorSize)
             i = j
         }
-        return if (knownSize in 0..all.size.toLong()) all.copyOf(knownSize.toInt()) else all
+        return all
     }
 
     /** The root storage's stream holding every small stream, read once. */

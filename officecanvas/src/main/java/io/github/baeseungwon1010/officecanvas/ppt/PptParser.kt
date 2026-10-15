@@ -57,7 +57,14 @@ internal object PptParser {
         } catch (e: Ole2Reader.FormatException) {
             throw ParseException("not a .ppt: ${e.message}", e)
         }
-        return ole.use { parse(it) }
+        // The file stays open while the deck's pictures may be drawn (they are read
+        // from it then); OfficeCanvas closes it through Deck.resources.
+        var keep = false
+        try {
+            return parse(ole).also { keep = it.resources != null }
+        } finally {
+            if (!keep) ole.close()
+        }
     }
 
     private fun parse(ole: Ole2Reader): Deck {
@@ -83,7 +90,7 @@ internal object PptParser {
             r = r,
             persist = readPersistDirectory(r, currentUser),
             defaults = dgg?.let { g -> ShapeProps.read(r, r.children(g).filter { it.type == RT.FOPT }) }.orEmpty(),
-            blips = readBlipStore(r, dgg, ole.readStream("Pictures")),
+            blips = readBlipStore(r, dgg, ole),
             fonts = environment?.let { readFonts(r, it) }.orEmpty(),
             baseStyles = readBaseStyles(r, environment),
             masters = lists.firstOrNull { it.instance == 1 }?.let { readList(r, it) }.orEmpty().associateBy { it.slideId }
@@ -104,7 +111,7 @@ internal object PptParser {
                 Slide(null, emptyList()) // one damaged slide shouldn't cost the rest of the deck
             }
         }
-        return Deck(widthEmu, heightEmu, slides)
+        return Deck(widthEmu, heightEmu, slides, resources = ole.takeIf { doc.blips !== BlipStore.EMPTY })
     }
 
     private fun readSlide(doc: Doc, slideRec: Rec, texts: List<List<Rec>>, slideNumber: Int, widthEmu: Long, heightEmu: Long): Slide {
@@ -259,12 +266,12 @@ internal object PptParser {
         return map
     }
 
-    private fun readBlipStore(r: RecordReader, dgg: Rec?, pictures: ByteArray?): BlipStore {
-        if (dgg == null || pictures == null) return BlipStore.EMPTY
+    private fun readBlipStore(r: RecordReader, dgg: Rec?, ole: Ole2Reader): BlipStore {
+        if (dgg == null || !ole.hasStream("Pictures")) return BlipStore.EMPTY
         val offsets = r.child(dgg, RT.BSTORE_CONTAINER)?.let { r.children(it) }.orEmpty()
             .filter { it.type == RT.FBSE && it.length >= 32 }
             .map { r.i32(it.start + 28) } // foDelay: offset into the Pictures stream
-        return if (offsets.isEmpty()) BlipStore.EMPTY else BlipStore(RecordReader(pictures), offsets)
+        return if (offsets.isEmpty()) BlipStore.EMPTY else BlipStore({ offset, length -> ole.readStream("Pictures", offset, length) }, offsets)
     }
 
     /** Font names in FontCollection order; text refers to fonts by index. */

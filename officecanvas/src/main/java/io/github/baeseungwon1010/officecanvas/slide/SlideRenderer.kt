@@ -454,11 +454,16 @@ internal object SlideRenderer {
         // (.pptx). Vector formats go to their players; the rest is raster. A zip
         // entry's format is told from its bytes, not its name: decks do carry
         // WMF files named .emf.
-        picture.emfBytes?.let { EmfRenderer.draw(canvas, it, rect); return }
-        picture.wmfBytes?.let { WmfRenderer.draw(canvas, it, rect); return }
-        val bytes = picture.imageBytes ?: picture.imageEntry?.let { entryName ->
+        val data = picture.data
+        val bytes = if (data != null) data.load() else picture.imageEntry?.let { entryName ->
             zip?.getEntry(entryName)?.let { entry -> zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES) }
-        } ?: return
+        }
+        bytes ?: return
+        when (data?.kind) {
+            PictureData.Kind.EMF -> { EmfRenderer.draw(canvas, bytes, rect); return }
+            PictureData.Kind.WMF -> { WmfRenderer.draw(canvas, bytes, rect); return }
+            else -> {}
+        }
         when {
             isEmf(bytes) -> { EmfRenderer.draw(canvas, bytes, rect); return }
             isPlaceableWmf(bytes) -> { WmfRenderer.draw(canvas, bytes, rect); return }

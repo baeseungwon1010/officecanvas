@@ -113,10 +113,15 @@ class PptParserTest {
         assertEquals("expected exactly one picture on the slide", 1, pictures.size)
 
         val pic = pictures.first()
-        assertNotNull("picture should carry decoded bytes, not a zip entry reference", pic.imageBytes)
+        assertNotNull("picture should be read from the blip store, not a zip entry", pic.data)
+        // The bytes are read from the still-open file when asked for.
+        val bytes = pic.data!!.load()!!
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(pic.imageBytes, 0, pic.imageBytes!!.size, opts)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
         assertTrue("picture bytes should decode to a real image", opts.outWidth > 0 && opts.outHeight > 0)
+        // The file stays open for that until the deck is done with.
+        assertNotNull(deck.resources)
+        deck.resources!!.close()
 
         // Placed at 1in/2in on a 13.333x7.5in slide — roughly the left half,
         // vertically past the midpoint.

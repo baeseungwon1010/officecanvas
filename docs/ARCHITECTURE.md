@@ -32,7 +32,7 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `Geometry`: preset shape formulas and custom geometry paths.
 - `Xml`: namespaces and DOM helpers, with external entities disabled.
 
-**`ppt`**: the binary PowerPoint 97–2003 format.
+**`ppt`**: the binary PowerPoint 97–2003 format. Pictures stay in the file: the blip store reads a picture's record when it is drawn, and the deck keeps the file open until `OfficeCanvas` closes it (`Deck.resources`).
 - `PptRecords`: record header parsing and navigation.
 - `PptParser`: persist directory, slide list, masters, hidden slides; assembles a `Deck`.
 - `PptShapes`: the OfficeArt ("Escher") shape tree: groups, anchors, fill, line, pictures, the picture store.
