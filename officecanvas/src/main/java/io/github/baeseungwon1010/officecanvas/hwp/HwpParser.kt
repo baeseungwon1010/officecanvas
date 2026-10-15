@@ -5,6 +5,13 @@ import io.github.baeseungwon1010.officecanvas.hwpx.BorderFill
 import io.github.baeseungwon1010.officecanvas.hwpx.CharStyle
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorArea
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorTimeline
+import io.github.baeseungwon1010.officecanvas.hwpx.BulletDef
+import io.github.baeseungwon1010.officecanvas.hwpx.NumberLevel
+import io.github.baeseungwon1010.officecanvas.hwpx.NumberingDef
+import io.github.baeseungwon1010.officecanvas.hwpx.ParaHead
+import io.github.baeseungwon1010.officecanvas.hwpx.ParaHeading
+import io.github.baeseungwon1010.officecanvas.hwpx.withHead
+import io.github.baeseungwon1010.officecanvas.ppt.bulletGlyph
 import io.github.baeseungwon1010.officecanvas.hwpx.DrawingKind
 import io.github.baeseungwon1010.officecanvas.hwpx.HWPUNIT_PER_INCH
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxDoc
@@ -57,6 +64,8 @@ internal object HwpParser {
     private const val FACE_NAME = TAG_BEGIN + 3
     private const val BORDER_FILL = TAG_BEGIN + 4
     private const val CHAR_SHAPE = TAG_BEGIN + 5
+    private const val NUMBERING = TAG_BEGIN + 7
+    private const val BULLET = TAG_BEGIN + 8
     private const val PARA_SHAPE = TAG_BEGIN + 9
     private const val PARA_HEADER = TAG_BEGIN + 50
     private const val PARA_TEXT = TAG_BEGIN + 51
@@ -144,11 +153,13 @@ internal object HwpParser {
 
         val pages = mutableListOf<HwpxPage>()
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
+        // Paragraph numbers count on from one section to the next.
+        val heads = ParaHead(info.numberings, info.bullets)
         for (data in sections) {
             if (pages.size >= Limits.MAX_PAGES) break
             data ?: continue
             try {
-                val section = Section(info, ::picture, pages.size)
+                val section = Section(info, ::picture, pages.size, heads)
                 val roots = Record.tree(Bytes(data))
                 section.read(roots, geometry)
                 geometry = section.geometry
@@ -241,10 +252,14 @@ internal object HwpParser {
         val charShapes: List<CharStyle>,
         val paraAligns: List<ParaAlign>,
         val borderFills: List<BorderFill>,
-        val binData: List<BinItem>
+        val binData: List<BinItem>,
+        val headings: List<ParaHeading?> = emptyList(),
+        val numberings: List<NumberingDef> = emptyList(),
+        val bullets: List<BulletDef> = emptyList()
     ) {
         fun charShape(id: Int) = charShapes.getOrNull(id) ?: CharStyle()
         fun paraAlign(id: Int) = paraAligns.getOrNull(id) ?: ParaAlign.LEFT
+        fun heading(paraShape: Int) = headings.getOrNull(paraShape)
         /** Border/fill ids are 1-based. */
         fun borderFill(id: Int) = borderFills.getOrNull(id - 1)
 
@@ -334,7 +349,40 @@ internal object HwpParser {
                     if (attr and 0xF == 0) BinItem(-1, "", 0)
                     else BinItem(r.body.u16(2), r.body.utf16(6, r.body.u16(4)), (attr ushr 4) and 0x3)
                 }
-                return DocInfo(charShapes, paraAligns, borderFills, binData)
+                // PARA_SHAPE attribute bits 23-24: heading kind (outline, number,
+                // bullet), 25-27 its level; the numbering or bullet id at byte 30.
+                val headings = records.filter { it.tag == PARA_SHAPE }.map { r ->
+                    val attr = r.body.u32(0)
+                    val kind = (attr ushr 23) and 0x3
+                    if (kind == 0) null else ParaHeading(kind, r.body.u16(30), (attr ushr 25) and 0x7)
+                }
+                // A paragraph head (numbering level or bullet): attributes (bits 4:
+                // distance in HWPUNIT rather than percent, 5-8: number shape), width
+                // adjustment, distance from the text, character shape.
+                fun gap(b: Bytes, o: Int) = b.u16(o + 6).let { if ((b.u32(o) ushr 4) and 0x1 != 0) it / 10 else it }
+                // NUMBERING: seven heads, each followed by its format string, then a
+                // start number and each level's start.
+                val numberings = records.filter { it.tag == NUMBERING }.map { r ->
+                    val b = r.body
+                    var o = 0
+                    val heads = (0 until 7).map {
+                        val at = o
+                        val len = b.u16(o + 12).coerceAtMost(64)
+                        val format = b.utf16(o + 14, len)
+                        o += 14 + 2 * len
+                        Triple(at, format, (b.u32(at) ushr 5) and 0xF)
+                    }
+                    val starts = (0 until 7).map { lv -> b.u32(o + 2 + 4 * lv).takeIf { b.size >= o + 6 + 4 * lv && it in 0..10_000 } ?: 1 }
+                    NumberingDef(heads.mapIndexed { lv, (at, format, shape) -> NumberLevel(format, shape, starts[lv], gap(b, at)) })
+                }
+                // BULLET: a paragraph head, then the character (a symbol font's
+                // private-use code for most of Hangul's own bullets).
+                val bullets = records.filter { it.tag == BULLET }.map { r ->
+                    val code = r.body.u16(12)
+                    val glyph = if (code in 0xF000..0xF0FF) bulletGlyph(code, "wingdings") else if (code >= 32) code.toChar().toString() else ""
+                    BulletDef(glyph, gap(r.body, 0))
+                }
+                return DocInfo(charShapes, paraAligns, borderFills, binData, headings, numberings, bullets)
             }
         }
     }
@@ -371,7 +419,9 @@ internal object HwpParser {
         return out
     }
 
-    private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, val firstPageIndex: Int) {
+    private class Section(val info: DocInfo, val picture: (Int) -> ByteArray?, val firstPageIndex: Int, val heads: ParaHead) {
+        /** The numbering outline paragraphs use (the section definition's, 1-based). */
+        private var outlineNumbering = 0
         var geometry = PageGeometry(59528, 84186, 8504, 8504)
         val pages = mutableListOf<HwpxPage>()
 
@@ -390,7 +440,10 @@ internal object HwpParser {
                 val changes = mutableListOf<(PageDecor) -> PageDecor>()
                 // The section definition rides on the first paragraph's controls.
                 for (ctrl in para.all(CTRL_HEADER)) when (ctrl.ctrlId) {
-                    "secd" -> ctrl.child(PAGE_DEF)?.let { geometry = pageGeometry(it.body) }
+                    "secd" -> {
+                        ctrl.child(PAGE_DEF)?.let { geometry = pageGeometry(it.body) }
+                        outlineNumbering = ctrl.body.u16(18)
+                    }
                     // Header and footer: a list of paragraphs placed in the header
                     // (footer) area; attribute bits 0-1 say which pages (both, even, odd).
                     "head" -> area(ctrl).let { a -> changes += { it.withHeader(a, ctrl.body.u32(4) and 0x3) } }
@@ -443,6 +496,8 @@ internal object HwpParser {
          */
         /** [firstInList]: [para] starts a header, footer or text box (its top is the list's top). */
         fun paragraph(para: Record, depth: Int, inCell: Boolean = false, firstInList: Boolean = false): List<HwpxElement> {
+            // Its number or bullet, counted even when the paragraph turns out empty.
+            var head = heads.next(info.heading(para.body.u16(8)), outlineNumbering)
             val raw = para.child(PARA_TEXT)?.body
             val units = (raw?.size ?: 0) / 2
             val chars = CharArray(units) { raw!!.u16(2 * it).toChar() }
@@ -480,6 +535,9 @@ internal object HwpParser {
 
             val align = info.paraAlign(para.body.u16(8))
             val out = mutableListOf<HwpxElement>()
+            // The number goes in front of the paragraph's first piece of text.
+            fun withHead(run: HwpxElement.TextRun): HwpxElement.TextRun =
+                head?.let { (mark, gap) -> head = null; run.withHead(mark, gap) } ?: run
             for ((k, line) in lines.withIndex()) {
                 val start = line.start.coerceIn(0, text.length)
                 val end = (if (k + 1 < lines.size) lines[k + 1].start else text.length).coerceIn(start, text.length)
@@ -494,11 +552,11 @@ internal object HwpParser {
                 }
                 for (pos in start until end) {
                     val obj = inlineAt[pos] ?: continue
-                    textRun(text, runStart, pos, runs, line, align, last, tabWidths)?.let { emit(it) }
+                    textRun(text, runStart, pos, runs, line, align, last, tabWidths)?.let { emit(withHead(it)) }
                     emit(place(obj, line, firstInList && k == 0 && text.substring(start, end).any { it != FILLER && it != OBJECT && !it.isWhitespace() }))
                     runStart = pos + 1
                 }
-                textRun(text, runStart, end, runs, line, align, last, tabWidths)?.let { emit(it) }
+                textRun(text, runStart, end, runs, line, align, last, tabWidths)?.let { emit(withHead(it)) }
             }
             return out
         }

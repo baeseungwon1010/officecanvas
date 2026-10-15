@@ -87,6 +87,18 @@ class HwpParserTest {
     }
 
     @Test
+    fun `numbered paragraphs and bullets get the marks Hangul would draw`() {
+        val heads = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.TextRun>()
+            .filter { it.text.endsWith("항목") }.map { it.spans.first().text to it.spans.drop(2).joinToString("") { s -> s.text } }
+        // Level 1 counts in digits, level 2 in Hangul syllables and restarts under
+        // each level-1 paragraph; the bullet is Wingdings' small bullet.
+        assertEquals(listOf("1." to "첫째 항목", "가." to "세부 항목", "2." to "둘째 항목", "•" to "점 항목"), heads)
+        // The text after the mark is set off by half the text size.
+        val first = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.TextRun>().first { it.text.endsWith("첫째 항목") }
+        assertEquals((first.spans[0].style.sizePt * 50).toLong(), first.spans[1].tabHu)
+    }
+
+    @Test
     fun `table cells carry fills, vertical alignment and text`() {
         val table = doc.pages.flatMap { it.elements }.filterIsInstance<HwpxElement.Table>().single()
         assertEquals(2, table.cells.size)

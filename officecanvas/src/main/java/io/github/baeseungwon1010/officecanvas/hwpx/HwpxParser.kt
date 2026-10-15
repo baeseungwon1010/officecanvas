@@ -1,5 +1,6 @@
 package io.github.baeseungwon1010.officecanvas.hwpx
 
+import io.github.baeseungwon1010.officecanvas.ppt.bulletGlyph
 import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.util.SafeXml
 import org.w3c.dom.Document
@@ -30,7 +31,10 @@ internal object HwpxParser {
     private class Header(
         val charStyles: Map<String, CharStyle>,
         val paraAligns: Map<String, ParaAlign> = emptyMap(),
-        val borderFills: Map<String, BorderFill> = emptyMap()
+        val borderFills: Map<String, BorderFill> = emptyMap(),
+        val headings: Map<String, ParaHeading> = emptyMap(),
+        val numberings: List<NumberingDef> = emptyList(),
+        val bullets: List<BulletDef> = emptyList()
     ) {
         fun styleOf(charPrIdRef: String?): CharStyle = charStyles[charPrIdRef] ?: CharStyle()
     }
@@ -55,6 +59,8 @@ internal object HwpxParser {
 
         val headerPath = manifest["header"] ?: manifest.entries.firstOrNull { it.key.contains("header") }?.value
         val header = headerPath?.let { zip.xml(it) }?.let { parseHeader(it) } ?: Header(emptyMap())
+        // Paragraph numbers count on from one section to the next.
+        state.get().heads = ParaHead(header.numberings, header.bullets)
 
         val sectionPaths = spineIds.mapNotNull { manifest[it] }.ifEmpty {
             // Fall back to filename order if the spine is unreadable — same
@@ -91,6 +97,7 @@ internal object HwpxParser {
         val root = doc.documentElement
         val paragraphs = root.all(HP, "p")
         val secPr = paragraphs.firstOrNull()?.run(HP, "run")?.child(HP, "secPr")
+        secPr?.getAttribute("outlineShapeIDRef")?.toIntOrNull()?.let { state.get().outlineNumbering = it }
         val geometry = secPr?.let {
             val pagePr = it.child(HP, "pagePr")
             val w = pagePr?.longOrNull("width"); val h = pagePr?.longOrNull("height")
@@ -190,9 +197,19 @@ internal object HwpxParser {
         var bodyXHu = 0L
         var bodyYHu = 0L
         var bodyWidthHu = 42520L
+        var heads = ParaHead(emptyList(), emptyList())
+        /** The numbering outline paragraphs use (the section's outlineShapeIDRef). */
+        var outlineNumbering = 0
     }
 
     private val state = ThreadLocal.withInitial { State() }
+
+    /** <hh:paraHead numFormat> values, in the order of Hangul's number shapes. */
+    private val NUMBER_FORMATS = listOf(
+        "DIGIT", "CIRCLED_DIGIT", "ROMAN_CAPITAL", "ROMAN_SMALL", "LATIN_CAPITAL", "LATIN_SMALL",
+        "CIRCLED_LATIN_CAPITAL", "CIRCLED_LATIN_SMALL", "HANGUL_SYLLABLE", "CIRCLED_HANGUL_SYLLABLE",
+        "HANGUL_JAMO", "CIRCLED_HANGUL_JAMO", "HANGUL_PHONETIC", "IDEOGRAPH", "CIRCLED_IDEOGRAPH"
+    )
 
     /** <hp:pos>: references (PAPER, PAGE, PARA/COLUMN) and offsets; [takesLines]:
      *  text wraps above and below it; [keepsBelowAnchor] as in HwpParser (such an
@@ -318,6 +335,12 @@ internal object HwpxParser {
 
     /** [firstInList]: [p] starts a header, footer or text box (its top is the list's top). */
     private fun parseParagraphFlow(p: DomElement, header: Header, depth: Int, firstInList: Boolean = false): List<HwpxElement> {
+        // Its number or bullet, counted even when the paragraph turns out empty;
+        // it goes in front of the paragraph's first piece of text.
+        val st = state.get()
+        var head = st.heads.next(header.headings[p.getAttribute("paraPrIDRef")], st.outlineNumbering)
+        fun withHead(run: HwpxElement.TextRun): HwpxElement.TextRun =
+            head?.let { (mark, gap) -> head = null; run.withHead(mark, gap) } ?: run
         val text = StringBuilder()
         val inlineAt = mutableMapOf<Int, HwpxElement>() // stream offset -> object
         // Marks where each run's text starts in the concatenated stream, so a
@@ -385,14 +408,14 @@ internal object HwpxParser {
             for (offset in start until end) {
                 val obj = inlineAt[offset] ?: continue
                 if (offset > runStart) {
-                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last, tabWidths)?.let { emit(it) }
+                    textRunFrom(text, runStart, offset, runBoundaries, seg, align, last, tabWidths)?.let { emit(withHead(it)) }
                 }
                 val textFirstLine = firstInList && i == 0 && text.substring(start, end).any { it != INLINE_OBJECT_MARKER && it != PAGE_NUMBER_MARK && !it.isWhitespace() }
                 emit(place(obj, seg.long("horzpos"), seg.long("vertpos"), textFirstLine, seg.long("vertsize")))
                 runStart = offset + 1
             }
             if (runStart < end) {
-                textRunFrom(text, runStart, end, runBoundaries, seg, align, last, tabWidths)?.let { emit(it) }
+                textRunFrom(text, runStart, end, runBoundaries, seg, align, last, tabWidths)?.let { emit(withHead(it)) }
             }
         }
         return out
@@ -611,7 +634,36 @@ internal object HwpxParser {
                 ?.takeIf { it.length == 6 }?.toIntOrNull(16)?.let { (0xFF shl 24) or it }
             bf.getAttribute("id") to BorderFill(side("leftBorder"), side("rightBorder"), side("topBorder"), side("bottomBorder"), face)
         }
-        return Header(styles, aligns, borderFills)
+        // Numbering and bullet definitions, and which paragraph shapes use them.
+        // <hh:paraHead>: the level's format ("^1.") as text, its number format and
+        // the distance to the text (a percentage of the text size, or HWPUNIT).
+        fun gap(head: DomElement?) = head?.getAttribute("textOffset")?.toIntOrNull()?.coerceIn(0, 10_000)?.let {
+            if (head.getAttribute("textOffsetType") == "HWPUNIT") it / 10 else it
+        } ?: 50
+        fun byId(items: List<DomElement>) = items.mapNotNull { e -> e.getAttribute("id").toIntOrNull()?.takeIf { it in 1..1000 }?.let { it to e } }.toMap()
+        val numberingNodes = byId(refList?.first(HH, "numberings")?.all(HH, "numbering").orEmpty())
+        val numberings = (1..(numberingNodes.keys.maxOrNull() ?: 0)).map { id ->
+            NumberingDef(numberingNodes[id]?.all(HH, "paraHead").orEmpty().take(10).map { h ->
+                NumberLevel(h.textContent.orEmpty().take(64), NUMBER_FORMATS.indexOf(h.getAttribute("numFormat")).coerceAtLeast(0),
+                    h.getAttribute("start").toIntOrNull()?.coerceIn(0, 10_000) ?: 1, gap(h))
+            })
+        }
+        val bulletNodes = byId(refList?.first(HH, "bullets")?.all(HH, "bullet").orEmpty())
+        val bullets = (1..(bulletNodes.keys.maxOrNull() ?: 0)).map { id ->
+            val b = bulletNodes[id]
+            val c = b?.getAttribute("char")?.firstOrNull()
+            BulletDef(when {
+                c == null || b.getAttribute("useImage") == "1" -> ""
+                c.code in 0xF000..0xF0FF -> bulletGlyph(c.code, "wingdings")
+                else -> c.toString()
+            }, gap(b?.child(HH, "paraHead")))
+        }
+        val headings = refList?.first(HH, "paraProperties")?.all(HH, "paraPr").orEmpty().mapNotNull { pp ->
+            val h = pp.first(HH, "heading") ?: return@mapNotNull null
+            val kind = when (h.getAttribute("type")) { "OUTLINE" -> 1; "NUMBER" -> 2; "BULLET" -> 3; else -> return@mapNotNull null }
+            pp.getAttribute("id") to ParaHeading(kind, h.getAttribute("idRef").toIntOrNull() ?: 0, h.getAttribute("level").toIntOrNull()?.coerceIn(0, 9) ?: 0)
+        }.toMap()
+        return Header(styles, aligns, borderFills, headings, numberings, bullets)
     }
 
     // ---- zip / xml helpers -------------------------------------------------

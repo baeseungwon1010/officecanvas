@@ -5,9 +5,10 @@ new page shows up as vertpos dropping back to 0. HwpxParser reads exactly that,
 so the layout here is computed with fixed metrics (10pt text, 160% line pitch,
 one full-width character per 1000 HWPUNIT) instead of a real layout engine.
 
-Page furniture and objects: a header with a tab and the page number field, a page number
-at the bottom center ("- 2 -"), a floating rectangle text box, an inline line and
-a cropped picture.
+Page furniture and objects: a header with a tab and the page number field, a
+page number at the bottom center ("- 2 -"), a floating rectangle text box, an
+inline line and a cropped picture; and numbered and bulleted paragraphs at the
+end.
 Run: python3 make_sample_hwpx.py <outdir>"""
 import struct
 import sys
@@ -58,14 +59,14 @@ def lineseg(textpos, vertpos, char_pr, width=BODY_W):
             f'baseline="{base}" spacing="{spacing}" horzpos="0" horzsize="{width}" flags="393216"/>')
 
 
-def paragraph(layout, text, char_pr=0, first=False, sec_pr=""):
+def paragraph(layout, text, char_pr=0, first=False, sec_pr="", para_pr=0):
     """sec_pr: section properties and page controls carried by the first run."""
     h, _, spacing = metrics(char_pr)
     segs, pos = [], 0
     for line in wrap(text):
         segs.append(lineseg(pos, layout.place(h + spacing), char_pr))
         pos += len(line)
-    return (f'<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
+    return (f'<hp:p id="0" paraPrIDRef="{para_pr}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
             f'<hp:run charPrIDRef="{char_pr}">{sec_pr}<hp:t>{escape(text)}</hp:t></hp:run>'
             f'<hp:linesegarray>{"".join(segs)}</hp:linesegarray></hp:p>')
 
@@ -215,6 +216,9 @@ for i in range(8):
     paras.append(paragraph(layout, f"({i + 10}) " + BODY))
 paras.append(paragraph(layout, "3. 맺음말", 1))
 paras.append(paragraph(layout, "이 샘플은 실제 문서를 대신해 테스트에 쓰입니다.", 2))
+# Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
+for text, para_pr in [("첫째 항목", 1), ("세부 항목", 2), ("둘째 항목", 1), ("점 항목", 3)]:
+    paras.append(paragraph(layout, text, para_pr=para_pr))
 
 section = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            '<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" '
@@ -225,9 +229,25 @@ char_prs = "".join(
     f'<hh:charPr id="{i}" height="{h}" textColor="{color}" shadeColor="none" useFontSpace="0" useKerning="0" '
     f'symMark="NONE" borderFillIDRef="1">{"<hh:bold/>" if bold else ""}</hh:charPr>'
     for i, (h, color, bold) in CHAR_PRS.items())
+# A numbering (the level's format as text, its number format) and a bullet
+# (Wingdings' small bullet), and paragraph shapes that use them.
+LEVELS = [("^1.", "DIGIT"), ("^2.", "HANGUL_SYLLABLE"), ("^3)", "DIGIT")]
+numbering = ('<hh:numberings itemCnt="1"><hh:numbering id="1" start="0">' + "".join(
+    f'<hh:paraHead start="1" level="{i + 1}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" '
+    f'textOffsetType="PERCENT" textOffset="50" numFormat="{fmt}" charPrIDRef="4294967295" checkable="0">{text}</hh:paraHead>'
+    for i, (text, fmt) in enumerate(LEVELS)) + '</hh:numbering></hh:numberings>')
+bullets = ('<hh:bullets itemCnt="1"><hh:bullet id="1" char="\uf09f" useImage="0"><hh:paraHead level="0" align="LEFT" '
+           'useInstWidth="0" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" '
+           'charPrIDRef="4294967295" checkable="0"/></hh:bullet></hh:bullets>')
+PARA_PRS = [("NONE", 0, 0), ("NUMBER", 1, 0), ("NUMBER", 1, 1), ("BULLET", 1, 0)]
+para_prs = (f'<hh:paraProperties itemCnt="{len(PARA_PRS)}">' + "".join(
+    f'<hh:paraPr id="{i}"><hh:align horizontal="LEFT" vertical="BASELINE"/>'
+    f'<hh:heading type="{kind}" idRef="{ref}" level="{level}"/></hh:paraPr>'
+    for i, (kind, ref, level) in enumerate(PARA_PRS)) + '</hh:paraProperties>')
 header = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
           '<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" version="1.4" secCnt="1">'
-          f'<hh:refList><hh:charProperties itemCnt="{len(CHAR_PRS)}">{char_prs}</hh:charProperties></hh:refList>'
+          f'<hh:refList><hh:charProperties itemCnt="{len(CHAR_PRS)}">{char_prs}</hh:charProperties>'
+          f'{numbering}{bullets}{para_prs}</hh:refList>'
           '</hh:head>')
 
 content = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

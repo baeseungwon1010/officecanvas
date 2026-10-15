@@ -3,8 +3,9 @@ sample.hwpx (headings, body text, a table), plus what the .hwp tests check
 exactly: a centered bold red title, a table cell with a fill and middle vertical
 alignment, an embedded PNG cropped to its right half, a header line ending in
 a tab and the page number field, a page number at the bottom center ("- 2 -"), a floating
-rectangle text box, an inline line, and a paragraph marked as starting a page
-while its line sits at the top like the one before it.
+rectangle text box, an inline line, a paragraph marked as starting a page
+while its line sits at the top like the one before it, and numbered and
+bulleted paragraphs.
 
 Every line carries its saved position (PARA_LINE_SEG), computed here with fixed
 metrics the way make_sample_hwpx.py does. The OLE2 container is written by a
@@ -147,8 +148,9 @@ def deflate(data):
 FACES = ["함초롬돋움", "함초롬바탕"]
 # (size 1/100 pt, color, bold, face index)
 CHAR_SHAPES = [(1000, 0x000000, False, 0), (1400, 0x1F3864, True, 0), (1600, 0xC00000, True, 1), (900, 0x595959, False, 0)]
-# alignment codes: 0 justify, 1 left, 2 right, 3 center
-PARA_SHAPES = [1, 3, 0]
+# (alignment, heading kind, level, numbering/bullet id); alignment codes: 0 justify,
+# 1 left, 2 right, 3 center; heading kinds: 2 numbered, 3 bullet.
+PARA_SHAPES = [(1, 0, 0, 0), (3, 0, 0, 0), (0, 0, 0, 0), (1, 2, 0, 1), (1, 2, 1, 1), (1, 3, 0, 1)]
 
 
 def char_shape(size, color, bold, face):
@@ -167,7 +169,7 @@ def border_fill(fill=None):
 
 
 docinfo = rec(16, 0, struct.pack("<H", 1) + b"\0" * 24)
-mappings = [1] + [len(FACES)] * 7 + [2, len(CHAR_SHAPES), 0, 0, 0, len(PARA_SHAPES), 1, 0, 0, 0]
+mappings = [1] + [len(FACES)] * 7 + [2, len(CHAR_SHAPES), 0, 1, 1, len(PARA_SHAPES), 1, 0, 0, 0]
 docinfo += rec(17, 0, b"".join(struct.pack("<i", v) for v in mappings))
 docinfo += rec(18, 1, struct.pack("<HH", 0x0001, 1) + utf16("png"))
 for _ in range(7):
@@ -177,8 +179,17 @@ docinfo += rec(20, 1, border_fill())
 docinfo += rec(20, 1, border_fill(0xDDEBF7))
 for cs in CHAR_SHAPES:
     docinfo += rec(21, 1, char_shape(*cs))
-for align in PARA_SHAPES:
-    docinfo += rec(25, 1, struct.pack("<I", align << 2) + b"\0" * 54)
+# Numbering: seven levels, each a paragraph head (attributes with the number
+# shape in bits 5-8, width adjustment, distance from the text in percent, char
+# shape) and its format; then the start number and each level's start.
+LEVELS = [("^1.", 0), ("^2.", 8), ("^3)", 0), ("^4)", 8), ("(^5)", 0), ("(^6)", 8), ("^7", 1)]
+numbering = b"".join(struct.pack("<IHHi", shape << 5, 0, 50, -1) + utf16(fmt) for fmt, shape in LEVELS)
+docinfo += rec(23, 1, numbering + struct.pack("<H", 0) + struct.pack("<7I", *([1] * 7)))
+# Bullet: a paragraph head and the character (Wingdings' small bullet).
+docinfo += rec(24, 1, struct.pack("<IHHi", 0, 0, 50, -1) + struct.pack("<H", 0xF09F) + b"\0" * 11)
+for align, kind, level, ref in PARA_SHAPES:
+    body = struct.pack("<I", (align << 2) | (kind << 23) | (level << 25)) + b"\0" * 26 + struct.pack("<H", ref) + b"\0" * 26
+    docinfo += rec(25, 1, body)
 docinfo += rec(26, 1, utf16("바탕글") + utf16("Normal") + struct.pack("<BBhHH", 0, 0, 1042, 0, 0) + b"\0\0")
 
 # Body: positions in HWPUNIT, relative to the body area (as in sample.hwpx).
@@ -344,6 +355,9 @@ flow.y = 0
 flow.pages += 1
 section += paragraph(0, flow, "3. 맺음말", 1, page_break=True)
 section += paragraph(0, flow, "이 샘플은 실제 문서를 대신해 테스트에 쓰입니다.", 3)
+# Numbered paragraphs (levels 1 and 2) and a bullet; Hangul adds the numbers.
+for text, shape in [("첫째 항목", 3), ("세부 항목", 4), ("둘째 항목", 3), ("점 항목", 5)]:
+    section += paragraph(0, flow, text, 0, shape)
 
 img = Image.new("RGB", (80, 40), (0xDC, 0x28, 0x28))
 img.paste((0x3A, 0x5B, 0xA0), (40, 0, 80, 40))
