@@ -123,8 +123,9 @@ internal object SlideRenderer {
             val depth = (s3.depthEmu * scale).toFloat()
             val color = s3.extrusionArgb ?: darker(shape.fillArgb ?: shape.gradient?.colors?.firstOrNull() ?: shape.strokeArgb!!)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.FILL }
-            // About a step per pixel of depth.
-            val steps = depth.toInt().coerceIn(2, 80)
+            // A step every couple of pixels of depth: the silhouettes overlap, so
+            // that reads as a solid side, and a slide of extruded shapes stays quick.
+            val steps = (depth / 2).toInt().coerceIn(2, 24)
             for (i in steps downTo 1) {
                 canvas.save()
                 canvas.concat(plane(rect, s3, -depth * i / steps))
