@@ -57,7 +57,7 @@ publishing {
 
 // tools/compare.sh passes a document through to RenderFileTool this way.
 tasks.withType<Test>().configureEach {
-    listOf("officecanvas.input", "officecanvas.output", "officecanvas.longSide").forEach { key ->
+    listOf("officecanvas.input", "officecanvas.output", "officecanvas.longSide", "officecanvas.fuzz", "officecanvas.fuzzSeed").forEach { key ->
         project.findProperty(key)?.let { systemProperty(key, it) }
     }
 }

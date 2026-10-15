@@ -37,6 +37,14 @@ The Hangul generators lay text out with fixed metrics instead of a real layout e
 
 `MaliciousInputTest` feeds crafted inputs, each a few bytes to about a megabyte, that once crashed, hung or exhausted memory: OLE2 headers with absurd FAT sizes and looping chains, a negative count in a PPT9 atom, a WMF record whose length wraps to zero, EMF and TIFF counts in the billions, SVG nested 10,000 deep, a PNG of 100,000 x 4,000 pixels, an HWPX table declaring 50,000 x 50,000 cells, HWP records nested 1,000 deep or claiming 2 GB, an HWP table declaring 65,535 x 65,535 cells, HWP drawing groups nested 1,000 deep and a polygon claiming two billion points with infinite matrices, HWPX drawing containers nested 5,000 deep and a polygon of 100,000 points with a relative width in the billions, random bytes as HWP streams, one slide listed 50,000 times, a chart claiming two billion points in a thousand series, and parts with a DTD. Each must finish within seconds on a thread with a 1 MB stack, and anything thrown out of `OfficeCanvas.render` must be an `OfficeCanvasException`.
 
+Beyond those, `FuzzTool` renders randomly damaged copies of the sample documents (bytes changed, flipped or copied from elsewhere; for `.pptx` and `.hwpx` one XML part is damaged and the zip packed again, so the damage reaches the parser instead of stopping at a checksum) and reports any copy that hangs for 30 seconds, throws anything but `OfficeCanvasException`, or takes over 5 seconds, keeping it under `officecanvas/build/fuzz`:
+
+```
+./gradlew :officecanvas:testDebugUnitTest --tests '*FuzzTool*' -Pofficecanvas.fuzz=1000 -Pofficecanvas.fuzzSeed=1
+```
+
+About 15,000 damaged copies over four seeds found nothing to report; once fonts were loaded, the slowest took 0.4 s.
+
 `AndroidXmlParserTest` parses the sample documents with Android's own XML parser (shipped in Robolectric's android-all), because the JDK parser unit tests otherwise use accepts hardening options that Android's rejects.
 
 ## Rendering on a device
