@@ -599,7 +599,7 @@ internal object SlideRenderer {
                 p.layout.draw(canvas)
                 debugBaselines?.let { out ->
                     for (l in 0 until p.layout.lineCount) {
-                        val t = p.layout.text.subSequence(p.layout.getLineStart(l), p.layout.getLineEnd(l)).toString().trim()
+                        val t = p.layout.text.subSequence(p.layout.getLineStart(l), p.layout.getLineEnd(l)).toString().replace(WORD_JOINER.toString(), "").trim()
                         if (t.isNotEmpty()) out += t to (y + p.layout.getLineBaseline(l))
                     }
                 }
@@ -672,6 +672,29 @@ internal object SlideRenderer {
     private const val MAX_FONT_PT = 4000f
     private const val MAX_TAB_STOPS = 256
 
+    /**
+     * [text] with a word joiner (U+2060, invisible) between Hangul and whatever
+     * touches it, so lines break between Korean words, at spaces, as PowerPoint
+     * wraps Korean, rather than between any two syllables. [before] is the
+     * character the text follows in its paragraph. A word wider than its line is
+     * still broken, by the layout's fallback.
+     */
+    private fun koreanWords(text: String, before: Char?): String {
+        fun hangul(c: Char) = c.code in 0xAC00..0xD7A3 || c.code in 0x1100..0x11FF || c.code in 0x3130..0x318F
+        fun joins(a: Char?, b: Char) = a != null && !a.isWhitespace() && !b.isWhitespace() && (hangul(a) || hangul(b)) && a != WORD_JOINER
+        if (text.none(::hangul) && (before == null || !hangul(before))) return text
+        val out = StringBuilder(text.length + 8)
+        var prev = before
+        for (c in text) {
+            if (joins(prev, c)) out.append(WORD_JOINER)
+            out.append(c)
+            prev = c
+        }
+        return out.toString()
+    }
+
+    private const val WORD_JOINER = '\u2060'
+
     private fun buildLayout(
         p: Paragraph, width: Int, scale: Double, shrink: Float,
         inlineBullet: Boolean, firstLineIndent: Float, restIndent: Float = 0f, layoutOriginPx: Float = 0f
@@ -691,7 +714,7 @@ internal object SlideRenderer {
             // run.text == "\n" marks an explicit <a:br>. StaticLayout honors a literal
             // newline as a forced break within a single layout, so it passes straight
             // through rather than needing a separate line-separator trick.
-            spannable.append(run.text)
+            spannable.append(koreanWords(run.text, spannable.lastOrNull()))
             runSizes += Triple(start, spannable.length, run.sizePt)
             val end = spannable.length
             val sizePx = ptToPx(run.sizePt, scale, shrink).coerceAtLeast(1f)

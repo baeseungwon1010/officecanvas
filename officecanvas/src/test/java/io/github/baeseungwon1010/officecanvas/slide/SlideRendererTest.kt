@@ -126,6 +126,26 @@ class SlideRendererTest {
         org.junit.Assert.assertTrue("text under the first row's", inked(552, 590))
     }
 
+    @Test
+    fun `Korean text wraps between words, not syllables`() {
+        val words = listOf("유사도는", "높지만", "생성된", "지", "육개월이", "넘은", "오래된", "패키지인", "경우")
+        val body = TextBody(listOf(Paragraph(listOf(Run(words.joinToString(" "), sizePt = 24f)))))
+        // A box about eight syllables wide (10in slide at 1000px: 100px per inch).
+        val shape = Element.Shape(Box(0, 0, (2.6 * EMU_PER_INCH).toLong(), 3 * EMU_PER_INCH.toLong()), null, null, null, 0, body)
+        val deck = Deck(10 * EMU_PER_INCH.toLong(), (7.5 * EMU_PER_INCH).toLong(), listOf(Slide(null, listOf(shape))))
+        val lines = mutableListOf<Pair<String, Float>>()
+        SlideRenderer.debugBaselines = lines
+        try {
+            SlideRenderer.render(deck, File("unused"), targetLongSidePx = 1000) { _, bmp -> bmp.recycle() }
+        } finally {
+            SlideRenderer.debugBaselines = null
+        }
+        org.junit.Assert.assertTrue("several lines: $lines", lines.size >= 3)
+        for ((text, _) in lines) {
+            org.junit.Assert.assertTrue("\"$text\" is whole words", text.split(" ").all { it in words })
+        }
+    }
+
     private fun sampleDistinctColors(bmp: Bitmap): Int {
         val seen = HashSet<Int>()
         val stepX = maxOf(1, bmp.width / 60)
