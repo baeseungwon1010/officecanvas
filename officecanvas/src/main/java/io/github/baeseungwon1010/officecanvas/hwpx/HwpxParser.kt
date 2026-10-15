@@ -566,7 +566,8 @@ internal object HwpxParser {
                 val shift = if (firstY != null && firstY < cursor) cursor - firstY else 0L
                 segs.lastOrNull()?.let { cursor = it.long("vertpos") + it.long("vertsize").takeIf { v -> v > 0 }.let { v -> v ?: it.long("textheight") } + it.long("spacing") + shift }
                 parseParagraphFlow(cellP, header, depth).map { it.shifted(0, shift) }
-            }.map { it.shifted(margin?.long("left") ?: 0L, margin?.long("top") ?: 0L) }
+            }.let { clearOfTables(it) { el -> el in state.get().placedFloating } }
+                .map { it.shifted(margin?.long("left") ?: 0L, margin?.long("top") ?: 0L) }
                 .map { it.fitTo(tc.child(HP, "cellSz")?.long("width")?.minus((margin?.long("left") ?: 0L) + (margin?.long("right") ?: 0L)) ?: 0L) }
             // <hp:cellSz> is a declared minimum that real content routinely outgrows
             // without it being kept in sync — one real sample had a 6-line answer

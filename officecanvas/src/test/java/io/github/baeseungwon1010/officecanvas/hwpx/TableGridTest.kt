@@ -23,4 +23,23 @@ class TableGridTest {
     fun `cells that don't add up give no grid`() {
         assertNull(gridSizes(listOf(GridSpan(0, 1, 3000), GridSpan(0, 2, 2000)), 2, 3000))
     }
+
+    private fun line(y: Long, text: String) = HwpxElement.TextRun(0, y, 10000, 1000, listOf(Span(text, CharStyle())), 850)
+    private fun table(y: Long, height: Long) =
+        HwpxElement.Table(0, y, 10000, height, listOf(10000), listOf(height), listOf(listOf(TableCell(1, 1, emptyList()))))
+
+    @Test
+    fun `what follows a table that grew past its saved room moves below it, keeping its spacing`() {
+        val els = listOf(line(0, "before"), table(1600, 30000), line(3200, "after"), line(4800, "next"))
+        val out = clearOfTables(els) { false }
+        assertEquals(listOf(0L, 1600L, 31600L, 33200L), out.map { it.yHu })
+    }
+
+    @Test
+    fun `content saved clear of a table, and floating tables, stay put`() {
+        val els = listOf(table(0, 1000), line(1600, "after"))
+        assertEquals(listOf(0L, 1600L), clearOfTables(els) { false }.map { it.yHu })
+        val floating = listOf(table(0, 30000), line(1600, "beside"))
+        assertEquals(listOf(0L, 1600L), clearOfTables(floating) { it is HwpxElement.Table }.map { it.yHu })
+    }
 }

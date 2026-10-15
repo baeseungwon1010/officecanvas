@@ -279,3 +279,25 @@ internal fun gridSizes(cells: List<GridSpan>, count: Int, totalHu: Long): List<L
     val sizes = (0 until count).map { edge[it + 1]!! - edge[it]!! }
     return sizes.takeIf { s -> s.all { it > 0 } }
 }
+
+/**
+ * A cell's [elements] with whatever comes after a table moved below it when the
+ * table is taller than the room its line was saved with (its rows grew to their
+ * content); what follows keeps its spacing. Objects [floating] by offsets don't
+ * push anything. The same rule as PageFlow's for a page.
+ */
+internal fun clearOfTables(elements: List<HwpxElement>, floating: (HwpxElement) -> Boolean): List<HwpxElement> {
+    if (elements.none { it is HwpxElement.Table }) return elements
+    val out = elements.toMutableList()
+    var shift = 0L
+    var top = 0L
+    var bottom: Long? = null
+    for (i in elements.indices.sortedBy { elements[it].yHu }) {
+        val el = elements[i]
+        val y = el.yHu
+        bottom?.let { b -> if (y > top && y + shift < b) shift += b - (y + shift) }
+        if (shift != 0L) out[i] = el.at(el.xHu, y + shift)
+        if (el is HwpxElement.Table && !floating(el)) { top = y; bottom = y + shift + el.heightHu }
+    }
+    return out
+}

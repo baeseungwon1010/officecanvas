@@ -4,6 +4,7 @@ import io.github.baeseungwon1010.officecanvas.hwpx.Border
 import io.github.baeseungwon1010.officecanvas.hwpx.BorderFill
 import io.github.baeseungwon1010.officecanvas.hwpx.CharStyle
 import io.github.baeseungwon1010.officecanvas.hwpx.GridSpan
+import io.github.baeseungwon1010.officecanvas.hwpx.clearOfTables
 import io.github.baeseungwon1010.officecanvas.hwpx.gridSizes
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorArea
 import io.github.baeseungwon1010.officecanvas.hwpx.DecorTimeline
@@ -877,7 +878,7 @@ internal object HwpParser {
                     val shift = lines.firstOrNull()?.let { if (it.y < cursor) cursor - it.y else 0L } ?: 0L
                     lines.lastOrNull()?.let { cursor = it.y + it.height + it.spacing + shift }
                     paragraph(para, depth + 1, inCell = true).map { it.shifted(0, shift) }
-                }.map { it.shifted(cell.marginLeft, cell.marginTop) }.map { el ->
+                }.let { clearOfTables(it) { el -> el in placedFloating } }.map { it.shifted(cell.marginLeft, cell.marginTop) }.map { el ->
                     // A line can't be wider than its cell; some writers save the
                     // page's width for lines in cells.
                     val inner = cell.w - cell.marginLeft - cell.marginRight
