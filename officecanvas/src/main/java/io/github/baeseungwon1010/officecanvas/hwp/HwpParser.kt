@@ -777,9 +777,12 @@ internal object HwpParser {
                     LIST_HEADER -> {
                         val b = c.body
                         // List header: paragraph count, flags (bits 5-6: vertical alignment),
-                        // then column, row, spans, size, margins, border/fill id.
+                        // then column, row, spans, size, margins, border/fill id. A margin
+                        // of 0xFFFF means the table's own (TABLE bytes 10-17: left,
+                        // right, top, bottom).
+                        fun margin(o: Int, tableOffset: Int) = b.u16(o).let { if (it == 0xFFFF) t.u16(tableOffset) else it }.toLong()
                         cells += Cell(b.u16(8), b.u16(10), b.u16(12).coerceAtLeast(1), b.u16(14).coerceAtLeast(1),
-                            b.u32(16).toLong(), b.u32(20).toLong(), b.u16(24).toLong(), b.u16(26).toLong(), b.u16(28).toLong(),
+                            b.u32(16).toLong(), b.u32(20).toLong(), margin(24, 10), margin(26, 12), margin(28, 14),
                             b.u16(32), (b.u32(4) ushr 5) and 0x3)
                     }
                     PARA_HEADER -> cells.lastOrNull()?.paras?.add(c)
@@ -792,6 +795,7 @@ internal object HwpParser {
             val grid = MutableList(rowCnt) { MutableList<TableCell?>(colCnt) { null } }
             val colWidths = HashMap<Int, Long>()
             val rowHeights = HashMap<Int, Long>()
+            val contentHeights = HashMap<Int, Long>()
             for (cell in cells) {
                 if (cell.row !in 0 until rowCnt || cell.col !in 0 until colCnt) continue
                 // Some writers start every paragraph of a cell at 0 rather than below
@@ -810,7 +814,20 @@ internal object HwpParser {
                         el.copy(widthHu = (cell.marginLeft + inner - el.xHu).coerceAtLeast(inner / 4)) else el
                 }
                 if (cell.colSpan == 1) colWidths[cell.col] = maxOf(colWidths[cell.col] ?: 0L, cell.w)
-                if (cell.rowSpan == 1) rowHeights[cell.row] = maxOf(rowHeights[cell.row] ?: 0L, cell.h)
+                // A cell's declared size is what it had when its row last fit on a
+                // page; content running over pages reaches further than that. Only
+                // lines that follow on from each other count: a stray line saved far
+                // below the rest isn't content to make room for.
+                var content = cell.marginTop
+                for (e in runs.sortedBy { it.yHu }) {
+                    if (e.yHu > content + 10_000) break
+                    content = maxOf(content, e.yHu + e.extentHu + cell.marginTop)
+                }
+                if (cell.rowSpan == 1) {
+                    rowHeights[cell.row] = maxOf(rowHeights[cell.row] ?: 0L, cell.h)
+                    // A cell declaring no height at all is a writer's leftover, not a size.
+                    if (cell.h > 0) contentHeights[cell.row] = maxOf(contentHeights[cell.row] ?: 0L, content)
+                }
                 grid[cell.row][cell.col] = TableCell(cell.colSpan, cell.rowSpan, runs,
                     borderFill = info.borderFill(cell.borderFill), vAlign = cell.vAlign)
             }
@@ -819,7 +836,16 @@ internal object HwpParser {
             // A table running over several pages declares only part of its height;
             // its rows say how tall it really is.
             val known = rowHeights.values.takeIf { it.isNotEmpty() }?.average()?.toLong() ?: (declared / rowCnt)
-            val rowsHu = (0 until rowCnt).map { rowHeights[it] ?: known }
+            val declaredRows = (0 until rowCnt).map { rowHeights[it] ?: known }
+            // Rows short of the declared height are stretched to it (as drawn); a
+            // row whose content runs well past that (over pages, or a cell declared
+            // smaller than its own margins) takes the content's.
+            val stretch = (declared.toDouble() / declaredRows.sum().coerceAtLeast(1)).coerceAtLeast(1.0)
+            val rowsHu = declaredRows.mapIndexed { r, h ->
+                val shown = (h * stretch).toLong()
+                val content = contentHeights[r] ?: 0L
+                if (content > shown + 2000) content else shown
+            }
             return HwpxElement.Table(
                 xHu = 0, yHu = 0, widthHu = width, heightHu = maxOf(declared, rowsHu.sum()),
                 columnWidthsHu = (0 until colCnt).map { colWidths[it] ?: (width / colCnt) },
