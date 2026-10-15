@@ -8,8 +8,9 @@ tests check exactly (PptxParserTest, SlideRendererTest).
   3. connectors: an elbow connector with an end arrow, a straight one with a
      start arrow
   4. preset outlines: right arrow, chevron, five-point star, rounded rectangle
-  5. text: automatic numbering, superscript, a no-wrap box, a box PowerPoint
-     shrank to 50% (normAutofit fontScale), a slide-number field
+  5. text: automatic numbering (started over after a bullet), superscript, a
+     no-wrap box, a box PowerPoint shrank to 50% (normAutofit fontScale), a
+     slide-number field
   6. pictures: a cropped PNG, an SVG-only icon, a picture inside
      mc:AlternateContent's fallback
   7. a table in PowerPoint's default style (stored by id only), and one with no
@@ -95,13 +96,17 @@ for i, kind in enumerate([MSO_SHAPE.RIGHT_ARROW, MSO_SHAPE.CHEVRON, MSO_SHAPE.ST
 # 5: text features
 s = prs.slides.add_slide(blank)
 tf = s.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(4), Inches(2)).text_frame
-for i, text in enumerate(["Alpha", "Beta", "Gamma"]):
+# A bulleted paragraph between numbered ones starts the numbering over.
+for i, text in enumerate(["Alpha", "Beta", "Gamma", "Note", "Delta"]):
     p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
     p.text = text
     pPr = p._p.get_or_add_pPr()
     pPr.set("marL", "342900")
     pPr.set("indent", "-342900")
-    etree.SubElement(pPr, qn("a:buAutoNum"), type="arabicPeriod")
+    if text == "Note":
+        etree.SubElement(pPr, qn("a:buChar"), char="•")
+    else:
+        etree.SubElement(pPr, qn("a:buAutoNum"), type="arabicPeriod")
 tf = s.shapes.add_textbox(Inches(5), Inches(0.5), Inches(4), Inches(1)).text_frame
 p = tf.paragraphs[0]
 r = p.add_run(); r.text = "E=mc"

@@ -107,7 +107,8 @@ class PptxFeatureTest {
     fun `text features`() {
         val texts = shapes(4).mapNotNull { it.text }
         val numbered = texts[0].paragraphs
-        assertEquals(listOf("1.", "2.", "3."), numbered.map { it.bullet })
+        // A bulleted paragraph breaks the sequence; numbering starts over after it.
+        assertEquals(listOf("1.", "2.", "3.", "•", "1."), numbered.map { it.bullet })
         assertEquals(342900L, numbered[0].marginLeftEmu)
         assertEquals(0L, numbered[0].bulletIndentEmu)
 

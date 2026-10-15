@@ -243,9 +243,10 @@ private fun Theme.paragraph(
 
     val hasText = runs.any { it.text.isNotBlank() }
     val firstSize = runs.firstOrNull { it.text.isNotBlank() }?.sizePt ?: runs.firstOrNull()?.sizePt ?: (style.sizePt ?: 18f) * fontScale
-    // Bullets and numbers are not shown on empty paragraphs.
+    // Bullets and numbers are not shown on empty paragraphs. A bulleted
+    // paragraph breaks a numbered sequence at its level, as an unnumbered one does.
     val bullet = when (val b = style.bullet) {
-        is BulletKind.Char -> if (hasText) b.char else null
+        is BulletKind.Char -> { counter.next(level, null, hasText); if (hasText) b.char else null }
         is BulletKind.Number -> counter.next(level, AutoNumber(b.scheme, b.start), hasText)
         else -> { counter.next(level, null, hasText); null }
     }
