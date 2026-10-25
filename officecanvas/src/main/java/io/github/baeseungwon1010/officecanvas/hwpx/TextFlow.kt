@@ -38,16 +38,24 @@ internal class TextFlow {
      *  the font's single line height, for [LineSpacing.Multiple]. */
     class Atom(
         val spans: List<Span>, val width: Float, val trailing: Float, val height: Long,
-        val lineBreak: Boolean = false, val line: Long = height * 6 / 5
+        val lineBreak: Boolean = false, val line: Long = height * 6 / 5,
+        /** A tab whose width depends on where it falls: the paragraph's stops (from
+         *  the column's left edge), then every [defaultTab]. */
+        val stops: List<TabStop>? = null, val defaultTab: Long = DEFAULT_TAB_HU
     ) {
         val isObject: Boolean get() = spans.any { it.inline != null }
     }
 
+    /** A tab stop [pos] from the column's left edge; text after it is set from
+     *  there (LEFT), centered on it, or ending at it (RIGHT). */
+    class TabStop(val pos: Long, val align: ParaAlign = ParaAlign.LEFT)
+
     /** A paragraph laid out from its own top: its lines (and objects set alone on
      *  theirs), where the next paragraph starts ([height]) and where its last line
      *  ends ([bottom]: a cell is sized to that, not to the spacing after it).
-     *  [empty]: no text or object at all. */
-    class Laid(val lines: List<HwpxElement>, val height: Long, val bottom: Long, val empty: Boolean)
+     *  [empty]: no text or object at all; [lead]: the space before its first line
+     *  (which a page the text runs onto drops). */
+    class Laid(val lines: List<HwpxElement>, val height: Long, val bottom: Long, val empty: Boolean, val lead: Long = 0)
 
     private val widths = HashMap<Pair<CharStyle, String>, Float>()
 
@@ -97,6 +105,10 @@ internal class TextFlow {
     fun tab(style: CharStyle, widthHu: Long = DEFAULT_TAB_HU) =
         Atom(listOf(Span("\t", style, widthHu)), widthHu.toFloat(), 0f, (style.sizePt * 100).toLong())
 
+    /** A tab set by [stops] (or every [defaultTab]) where it falls in the line. */
+    fun tab(style: CharStyle, stops: List<TabStop>, defaultTab: Long) =
+        Atom(listOf(Span("\t", style, 0)), 0f, 0f, (style.sizePt * 100).toLong(), stops = stops.sortedBy { it.pos }, defaultTab = defaultTab.coerceAtLeast(100))
+
     fun lineBreak(style: CharStyle) = Atom(emptyList(), 0f, 0f, (style.sizePt * 100).toLong(), lineBreak = true)
 
     fun inline(obj: HwpxElement, style: CharStyle) = Atom(listOf(inlineSpan(obj, style)), obj.widthHu.toFloat(), 0f, obj.extentHu, line = obj.extentHu)
@@ -119,16 +131,20 @@ internal class TextFlow {
         do {
             val x = shape.left + if (first) shape.indent.coerceAtLeast(0) else (-shape.indent).coerceAtLeast(0)
             val avail = (width - x - shape.right).coerceAtLeast(500)
-            val start = i
+            val lineAtoms = ArrayList<Atom>()
             var used = 0f
             while (i < atoms.size && !atoms[i].lineBreak) {
-                val a = atoms[i]
-                if (i > start && used + a.width - a.trailing > avail) break
+                var a = atoms[i]
+                if (a.stops != null) {
+                    val w = tabWidth(atoms, i, x + used, shape)
+                    a = Atom(listOf(Span("\t", a.spans[0].style, w.toLong())), w, 0f, a.height, line = a.line)
+                }
+                if (lineAtoms.isNotEmpty() && used + a.width - a.trailing > avail) break
+                lineAtoms += a
                 used += a.width
                 i++
             }
             val forced = i < atoms.size && atoms[i].lineBreak
-            val lineAtoms = atoms.subList(start, i)
             if (forced) i++
             val textHeight = lineAtoms.filter { !it.isObject }.maxOfOrNull { it.height } ?: baseHeight
             val objectHeight = lineAtoms.filter { it.isObject }.maxOfOrNull { it.height } ?: 0L
@@ -168,7 +184,27 @@ internal class TextFlow {
             first = false
         } while (i < atoms.size && lines.size < MAX_LINES)
         val empty = atoms.none { a -> a.isObject || a.spans.any { it.text.isNotBlank() } }
-        return Laid(lines, y + shape.next, bottom + shape.next, empty)
+        return Laid(lines, y + shape.next, bottom + shape.next, empty, lead = shape.prev)
+    }
+
+    /** The width of the tab at [i] starting [pos] from the column's left: to the
+     *  next stop past it (the hanging indent's edge counts as one), or the next
+     *  default stop; a centered or right stop leaves room for the text after it,
+     *  up to the next tab. */
+    private fun tabWidth(atoms: List<Atom>, i: Int, pos: Float, shape: ParaShape): Float {
+        val tab = atoms[i]
+        val implicit = if (shape.left > pos + 1) listOf(TabStop(shape.left)) else emptyList()
+        val stop = (tab.stops.orEmpty() + implicit).filter { it.pos > pos + 1 }.minByOrNull { it.pos }
+            ?: return (((pos / tab.defaultTab).toLong() + 1) * tab.defaultTab - pos).coerceAtLeast(0f)
+        var follow = 0f
+        var k = i + 1
+        while (k < atoms.size && atoms[k].stops == null && !atoms[k].lineBreak) { follow += atoms[k].width; k++ }
+        if (k > i + 1) follow -= atoms[k - 1].trailing
+        return when (stop.align) {
+            ParaAlign.RIGHT -> stop.pos - pos - follow
+            ParaAlign.CENTER -> stop.pos - pos - follow / 2
+            else -> stop.pos - pos
+        }.coerceAtLeast(0f)
     }
 
     /** Hangul's line pitch: a percent of the text height, a fixed pitch, extra
@@ -191,16 +227,28 @@ internal class TextFlow {
     fun place(flow: PageFlow, laid: Laid, y: Long, bodyHeight: Long): Pair<Long, Long> {
         var base = y
         var anchorY: Long? = null
-        for (line in laid.lines) {
-            var top = base + line.yHu
-            if (top + line.extentHu > bodyHeight && top > 0 && line !is HwpxElement.Table) {
-                flow.breakPage(); base = -line.yHu; top = 0
+        // Drawings (a paragraph's shading and borders) go with the line after them:
+        // whether to start a page is decided by that line.
+        var i = 0
+        val lines = laid.lines
+        while (i < lines.size) {
+            var k = i
+            while (k < lines.size && lines[k] is HwpxElement.Drawing) k++
+            val line = lines.getOrNull(k)
+            if (line != null && line !is HwpxElement.Table) {
+                val top = base + line.yHu
+                if (top + line.extentHu > bodyHeight && top > 0) { flow.breakPage(); base = -lines[i].yHu.coerceAtMost(line.yHu) }
             }
-            if (anchorY == null) anchorY = top
-            val pageBefore = flow.page
-            flow.add(line.at(line.xHu, top))
-            // A table that ran over pages: the paragraph goes on below its last piece.
-            if (line is HwpxElement.Table && flow.page != pageBefore) base = flow.lastTableBottom - line.yHu - line.heightHu
+            for (j in i..minOf(k, lines.size - 1)) {
+                val el = lines[j]
+                val top = base + el.yHu
+                if (anchorY == null && el !is HwpxElement.Drawing) anchorY = top
+                val pageBefore = flow.page
+                flow.add(el.at(el.xHu, top), laidOut = true)
+                // A table that ran over pages: the paragraph goes on below its last piece.
+                if (el is HwpxElement.Table && flow.page != pageBefore) base = flow.lastTableBottom - el.yHu - el.heightHu
+            }
+            i = k + 1
         }
         return (anchorY ?: base) to base + laid.height
     }

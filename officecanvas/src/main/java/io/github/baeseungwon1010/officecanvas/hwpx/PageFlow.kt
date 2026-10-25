@@ -45,7 +45,10 @@ internal class PageFlow(private val bodyHeightHu: Long) {
      */
     fun add(
         el: HwpxElement, startsPage: Boolean = false, startsLine: Boolean = true,
-        floating: Boolean = false, takesLines: Boolean = false, movesWithText: Boolean = false
+        floating: Boolean = false, takesLines: Boolean = false, movesWithText: Boolean = false,
+        /** Laid out here, pages broken explicitly ([breakPage]): a position never
+         *  implies a new page. */
+        laidOut: Boolean = false
     ) {
         if (floating) {
             // An object placed from its paragraph moves with the text pushed down.
@@ -66,9 +69,9 @@ internal class PageFlow(private val bodyHeightHu: Long) {
             place(el)
             return
         }
-        val wrapped = if (startsLine) el.yHu <= lastY else el.yHu < lastY
+        val wrapped = !laidOut && if (startsLine) el.yHu <= lastY else el.yHu < lastY
         if (wrapped || (startsPage && pages.last().isNotEmpty())) newPage()
-        lastY = el.yHu
+        lastY = if (laidOut) maxOf(lastY, el.yHu) else el.yHu
         settlePending(el.yHu)
         // What follows a table can't start inside it: a table grown past the size
         // it was saved with (content bigger than its cells declare) pushes the rest
