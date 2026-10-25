@@ -76,7 +76,7 @@ Compare at the size the library renders by default (1600 px). At much smaller si
 
 On the generated sample deck, every baseline is within 0.6 pt of LibreOffice's. On a real 75-slide `.ppt` lecture deck, 64 slides have every baseline within 6 pt; most of the rest are text shrunk to fit, where the renderer follows PowerPoint's steps (see FORMAT_NOTES) and LibreOffice its own, or differ by a few points in regions with many empty lines.
 
-For `.docx`, on 80 real documents (1,733 pages as LibreOffice lays them out) the page count matches LibreOffice's in 45 and is within 10 % in 72; the rest are mostly tables of narrow cells in Hangul fonts the reference doesn't have, whose row heights depend on those fonts' line heights.
+For `.docx`, on 80 real documents (1,733 pages as LibreOffice lays them out) the page count matches LibreOffice's in 45 and is within 10 % in 71; on the 65 Hangul documents exported to `.docx` by LibreOffice (floating text boxes, pictures and equations), in 31 and 59; the rest are mostly tables of narrow cells in Hangul fonts the reference doesn't have, whose row heights depend on those fonts' line heights.
 
 For `.pptx`, `RenderFileTool` also accepts a directory (`-Pofficecanvas.input=<dir>`) and renders every document in it into its own subdirectory, which makes it practical to score a whole set of decks after each change. On 34 real decks (447 slides) the mean difference score is 1.8; the largest remaining differences are 3-D perspective and Hangul set in different fallback fonts.
 
