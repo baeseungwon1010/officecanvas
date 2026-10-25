@@ -2,6 +2,7 @@ package io.github.baeseungwon1010.officecanvas
 
 import android.content.Context
 import android.graphics.Bitmap
+import io.github.baeseungwon1010.officecanvas.docx.DocxParser
 import io.github.baeseungwon1010.officecanvas.hwp.HwpParser
 import io.github.baeseungwon1010.officecanvas.hwp.HwpmlParser
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxParser
@@ -64,7 +65,7 @@ object OfficeCanvas {
         var kind: DocumentFormat? = format
         try {
             kind = kind ?: DocumentFormat.detect(file)
-                ?: throw OfficeCanvasException("not a PPTX, PPT, HWPX or HWP document: ${file.name}")
+                ?: throw OfficeCanvasException("not a PPTX, PPT, DOCX, HWPX or HWP document: ${file.name}")
             loadFonts(context)
             when (kind) {
                 DocumentFormat.PPTX, DocumentFormat.PPT -> {
@@ -75,9 +76,10 @@ object OfficeCanvas {
                         deck.resources?.close()
                     }
                 }
-                DocumentFormat.HWPX, DocumentFormat.HWP -> {
+                DocumentFormat.HWPX, DocumentFormat.HWP, DocumentFormat.DOCX -> {
                     val doc = when {
                         kind == DocumentFormat.HWPX -> HwpxParser.parse(file)
+                        kind == DocumentFormat.DOCX -> DocxParser.parse(file)
                         HwpmlParser.isHwpml(file) -> HwpmlParser.parse(file)
                         else -> HwpParser.parse(file)
                     }

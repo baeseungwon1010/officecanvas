@@ -342,6 +342,55 @@ class MaliciousInputTest {
         assertEquals("r", SafeXml.parse("<r/>".toByteArray())!!.documentElement.tagName)
     }
 
+    // ---- DOCX ---------------------------------------------------------------
+
+    private val w = """xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""""
+
+    private fun docx(body: String, vararg parts: Pair<String, String>) = zip(
+        "[Content_Types].xml" to "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+        "word/document.xml" to """<w:document $w><w:body>$body</w:body></w:document>""",
+        *parts
+    )
+
+    @Test
+    fun `a DOCX document part with a DOCTYPE is refused`() {
+        val file = zip("word/document.xml" to """<?xml version="1.0"?><!DOCTYPE d [<!ENTITY x "xx">]><w:document $w><w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>""")
+        assertTrue(survives { render(file) } is OfficeCanvasException)
+    }
+
+    @Test
+    fun `DOCX tables nested a thousand deep, and one spanning a million columns`() {
+        val nested = "<w:tbl><w:tr><w:tc>".repeat(1000) + "<w:p/>" + "</w:tc></w:tr></w:tbl>".repeat(1000)
+        val wide = """<w:tbl><w:tblGrid>${"<w:gridCol w:w=\"1\"/>".repeat(2000)}</w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="1000000"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"""
+        survives(20) { render(docx(nested + wide)) }
+    }
+
+    @Test
+    fun `a DOCX paragraph of two million characters, absurd sizes, spacing and page size`() {
+        val body = """<w:p><w:pPr><w:spacing w:line="2000000000" w:before="-99999999" w:after="1e308"/><w:ind w:left="999999999" w:hanging="-5"/>""" +
+            """<w:tabs><w:tab w:val="right" w:pos="-1"/></w:tabs></w:pPr><w:r><w:rPr><w:sz w:val="99999999"/><w:spacing w:val="-2000000000"/></w:rPr>""" +
+            """<w:t>${"가".repeat(2_000_000)}</w:t><w:tab/></w:r></w:p><w:sectPr><w:pgSz w:w="-5" w:h="NaN"/><w:pgMar w:top="1e30"/></w:sectPr>"""
+        var pages = 0
+        survives(120) { pages = render(docx(body), longSide = 32) }
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
+    @Test
+    fun `DOCX styles based on each other in a loop, and lists counting past every format`() {
+        val styles = """<w:styles $w><w:style w:type="paragraph" w:styleId="a"><w:basedOn w:val="b"/></w:style><w:style w:type="paragraph" w:styleId="b"><w:basedOn w:val="a"/></w:style></w:styles>"""
+        val numbering = """<w:numbering $w><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="2147483647"/><w:numFmt w:val="koreanDigital"/><w:lvlText w:val="%1%9%1%1%1"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"""
+        val p = """<w:p><w:pPr><w:pStyle w:val="a"/><w:numPr><w:ilvl w:val="99"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"""
+        survives(20) { render(docx(p.repeat(3000), "word/styles.xml" to styles, "word/numbering.xml" to numbering)) }
+    }
+
+    @Test
+    fun `a DOCX breaking the page in every run stops at the page limit`() {
+        val file = docx("""<w:p>${"<w:r><w:t>x</w:t><w:br w:type=\"page\"/></w:r>".repeat(3000)}</w:p>""")
+        var pages = 0
+        survives(60) { pages = render(file, longSide = 32) }
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
     // ---- HWPML (.hwp saved as XML) -------------------------------------------
 
     private fun hwpml(body: String, head: String = "") = File.createTempFile("evil", ".hwp").apply {

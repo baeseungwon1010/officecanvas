@@ -38,16 +38,26 @@ class OfficeCanvasTest {
     @Test
     fun `other files are not mistaken for documents`() {
         assertNull(DocumentFormat.detect(resource("emf_samples/shapes.emf")))
-        val otherZip = File.createTempFile("other", ".zip").apply {
+        fun zip(entry: String) = File.createTempFile("other", ".zip").apply {
             deleteOnExit()
             java.util.zip.ZipOutputStream(outputStream()).use { z ->
-                z.putNextEntry(java.util.zip.ZipEntry("word/document.xml")); z.write("<w/>".toByteArray()); z.closeEntry()
+                z.putNextEntry(java.util.zip.ZipEntry(entry)); z.write("<w/>".toByteArray()); z.closeEntry()
             }
         }
-        assertNull(DocumentFormat.detect(otherZip))
+        val xlsx = zip("xl/workbook.xml")
+        assertNull(DocumentFormat.detect(xlsx))
         try {
-            OfficeCanvas.render(context, otherZip) { _, _ -> }
-            fail("a .docx-shaped zip should be rejected")
+            OfficeCanvas.render(context, xlsx) { _, _ -> }
+            fail("an .xlsx-shaped zip should be rejected")
+        } catch (e: OfficeCanvasException) {
+            // expected
+        }
+        // A .docx whose document part isn't Word's fails as a document, not a crash.
+        val brokenDocx = zip("word/document.xml")
+        assertEquals(DocumentFormat.DOCX, DocumentFormat.detect(brokenDocx))
+        try {
+            OfficeCanvas.render(context, brokenDocx) { _, _ -> }
+            fail("a .docx without a body should be rejected")
         } catch (e: OfficeCanvasException) {
             // expected
         }

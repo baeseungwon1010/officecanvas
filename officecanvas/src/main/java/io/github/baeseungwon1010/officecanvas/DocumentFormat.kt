@@ -17,6 +17,10 @@ enum class DocumentFormat {
     /** Hangul (OWPML, .hwpx): a zip of XML parts with the layout Hangul saved. */
     HWPX,
 
+    /** Word 2007+ (.docx, WordprocessingML): a zip of XML parts, laid out here
+     *  since Word saves no layout. */
+    DOCX,
+
     /** Hangul (.hwp): HWP 5.0 binary records in an OLE2 compound file, or the
      *  older HWPML XML some systems still save .hwp files as. */
     HWP;
@@ -46,6 +50,7 @@ enum class DocumentFormat {
                 when {
                     zip.getEntry("ppt/presentation.xml") != null -> PPTX
                     zip.getEntry("Contents/content.hpf") != null -> HWPX
+                    zip.getEntry("word/document.xml") != null -> DOCX
                     else -> null
                 }
             }
