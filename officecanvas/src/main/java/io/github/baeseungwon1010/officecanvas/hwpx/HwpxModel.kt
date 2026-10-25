@@ -131,7 +131,12 @@ internal sealed class HwpxElement {
         val columnWidthsHu: List<Long>,
         val rowHeightsHu: List<Long>,
         /** Row-major; a cell covered by another cell's span is null. */
-        val cells: List<List<TableCell?>>
+        val cells: List<List<TableCell?>>,
+        /** Leading rows repeated at the top of each page the table runs onto. */
+        val headerRows: Int = 0,
+        /** Rows may be cut at a page's end (Word); otherwise only a row taller
+         *  than a page is (Hangul). */
+        val rowsBreak: Boolean = false
     ) : HwpxElement()
 
     data class ImageEl(

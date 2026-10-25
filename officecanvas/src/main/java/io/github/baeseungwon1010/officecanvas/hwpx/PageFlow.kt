@@ -164,6 +164,12 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         }
         var rest: HwpxElement.Table = el
         var guard = 0
+        // Header rows to repeat on each later page (when they leave room for more).
+        val header = el.headerRows.takeIf { it in 1 until el.cells.size }?.let { n ->
+            val h = scaledRowHeights(el).take(n).sum()
+            if (h < bodyHeightHu / 3) rows(el, 0, n, 0, h) else null
+        }
+        var repeated = 0
         while (true) {
             if (rest.yHu + rest.heightHu <= bodyHeightHu * 102 / 100) {
                 pages.last() += rest
@@ -177,7 +183,7 @@ internal class PageFlow(private val bodyHeightHu: Long) {
             while (fit < heights.size && used + heights[fit] <= room) { used += heights[fit]; fit++ }
             // A row taller than a page can't move to the next one whole: it is cut
             // between its lines, as Hangul does, and continues on the next page.
-            if (fit < heights.size && heights[fit] > bodyHeightHu * 9 / 10 && room - used >= MIN_SPLIT_HU) {
+            if (fit < heights.size && (rest.rowsBreak || heights[fit] > bodyHeightHu * 9 / 10) && room - used >= MIN_SPLIT_HU) {
                 val split = splitRow(rest, fit, heights, room - used)
                 if (split != null) {
                     rest = split
@@ -186,8 +192,9 @@ internal class PageFlow(private val bodyHeightHu: Long) {
                     fit++
                 }
             }
-            // A table starting at the top of a page keeps at least one row there.
-            if (fit == 0 && rest.yHu <= 0) { fit = 1; used = heights[0] }
+            // A table starting at the top of a page keeps at least one row there
+            // (besides a repeated header).
+            if (fit <= repeated && rest.yHu <= 0) { fit = (repeated + 1).coerceAtMost(heights.size); used = heights.take(fit).sum() }
             if (fit >= heights.size) { pages.last() += rest; tableEnd = rest.yHu + rest.heightHu; return }
             if (fit > 0) pages.last() += rows(rest, 0, fit, rest.yHu, used)
             // The rest continues at the top of the next page, and what follows the
@@ -196,6 +203,13 @@ internal class PageFlow(private val bodyHeightHu: Long) {
             newPage()
             lastY = 0
             rest = rows(rest, fit, heights.size, 0, heights.drop(fit).sum())
+            if (header != null) {
+                rest = rest.copy(
+                    heightHu = header.heightHu + rest.heightHu, rowHeightsHu = header.rowHeightsHu + rest.rowHeightsHu,
+                    cells = header.cells + rest.cells
+                )
+                repeated = header.cells.size
+            }
         }
     }
 

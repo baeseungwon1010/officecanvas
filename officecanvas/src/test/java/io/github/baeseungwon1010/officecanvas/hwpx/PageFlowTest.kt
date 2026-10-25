@@ -84,4 +84,19 @@ class PageFlowTest {
         val pages = flow.finish().map { it.value }
         assertEquals(listOf(listOf("end of page one" to 60000L), listOf("page two" to 3600L)), pages.map { texts(it) })
     }
+
+    @Test
+    fun `header rows repeat at the top of each page a table runs onto`() {
+        // A header row and 9 rows of 20000: about three pages of 70000.
+        val rows = (0 until 10).map { r -> listOf(TableCell(1, 1, listOf(line(100, "row $r")))) }
+        val heights = listOf(2000L) + List(9) { 20000L }
+        val table = HwpxElement.Table(0, 0, 40000, heights.sum(), listOf(40000), heights, rows, headerRows = 1)
+        val flow = PageFlow(70000)
+        flow.add(table, laidOut = true)
+        val pages = flow.finish().map { it.value.filterIsInstance<HwpxElement.Table>().single() }
+        assertTrue("${pages.size} pages", pages.size >= 3)
+        for (piece in pages) assertEquals("row 0", piece.cells[0][0]!!.runs.single().text)
+        // Every other row shows up once.
+        assertEquals((1 until 10).map { "row $it" }, pages.flatMap { p -> p.cells.drop(1).map { it[0]!!.runs.single().text } })
+    }
 }
