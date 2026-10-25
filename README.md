@@ -1,6 +1,6 @@
 # OfficeCanvas
 
-Render PowerPoint (`.pptx`, `.ppt`) and Hangul (`.hwpx`, `.hwp`) documents to Android `Bitmap`s, on the device, in plain Kotlin. No native code, no server, no dependencies beyond the Android SDK.
+Render PowerPoint (`.pptx`, `.ppt`), Word (`.docx`) and Hangul (`.hwpx`, `.hwp`) documents to Android `Bitmap`s, on the device, in plain Kotlin. No native code, no server, no dependencies beyond the Android SDK.
 
 ![Slides rendered by OfficeCanvas next to LibreOffice's rendering of the same .ppt](docs/images/ppt_vs_libreoffice.png)
 
@@ -8,7 +8,7 @@ Render PowerPoint (`.pptx`, `.ppt`) and Hangul (`.hwpx`, `.hwp`) documents to An
 
 Showing an Office or Hangul document inside an Android app usually means one of three things: upload it to a conversion service, ship a very large native office suite, or pay for a commercial SDK. The common JVM option, Apache POI, renders slides through `java.awt`, which Android does not have.
 
-Slides and Hangul documents have a property that makes a small renderer possible: every shape, and in Hangul documents every line of text, is stored with its final position. PowerPoint saves absolute coordinates for each shape; Hangul saves where each line starts and where each page breaks. So the job is reading those positions back and drawing them, not re-running a word processor's layout engine.
+Slides and Hangul documents have a property that makes a small renderer possible: every shape, and in Hangul documents every line of text, is stored with its final position. PowerPoint saves absolute coordinates for each shape; Hangul saves where each line starts and where each page breaks. So the job is reading those positions back and drawing them, not re-running a word processor's layout engine. Word documents are the exception: they save no layout, so `.docx` is laid out here, with a small layout engine of its own (see below).
 
 ## Usage
 
@@ -25,7 +25,7 @@ val pageCount = OfficeCanvas.render(context, file) { index, bitmap ->
 - Pages are handed over one at a time and never held together, so long decks don't run out of memory. The callback owns each bitmap.
 - `longSidePx` (default 1600) sets the size of a page's longer side; the other side follows the page's aspect ratio.
 - Rendering is synchronous. Call it off the main thread.
-- Anything that isn't a readable PPTX, PPT, HWPX or HWP raises `OfficeCanvasException`. Password-protected and distribution-only (배포용) `.hwp` files are encrypted and not supported.
+- Anything that isn't a readable PPTX, PPT, DOCX, HWPX or HWP raises `OfficeCanvasException`. Password-protected and distribution-only (배포용) `.hwp` files are encrypted and not supported.
 - At most `OfficeCanvas.MAX_PAGES` (1000) pages are rendered.
 
 ### Files from other people
@@ -117,13 +117,31 @@ Not rendered: scatter, radar and 3-D charts, inner shadows, glow, reflections, b
 
 Some systems still save `.hwp` files in HWPML, Hangul's older XML format. It saves no line positions, so OfficeCanvas lays it out itself: lines broken to the column width with the same faces it draws with, the paragraph's line spacing, alignment and margins, tables (rows as tall as their cells declare or their text needs), tables placed by offsets, and page breaks. Pictures, headers and footers in HWPML are not drawn yet, and its line breaks can differ from Hangul's where the fonts differ.
 
+### Word documents
+
+Word saves no line breaks or page breaks, so a `.docx` is laid out here: lines broken to the column width with the faces the renderer draws with, set at the paragraph's line spacing, and paged with the section's page size and margins. What is laid out and drawn:
+
+| | DOCX |
+|---|---|
+| Styles: document defaults, table style, paragraph and character style chains, direct formatting; theme fonts | ✓ |
+| Character formatting: size, color, bold, italic, underline, strikethrough, super/subscript, caps, hidden text, shading and highlighter | ✓ |
+| Paragraphs: alignment, indents (first line, hanging), spacing before and after (dropped at the top of a page the text ran onto, and between paragraphs of one style when they say so), line spacing (multiple, exact, at least) | ✓ |
+| Tab stops (left, center, right) and the default stops | ✓ |
+| List numbering in Word's formats (decimal, letters, roman, 가나다, ㄱㄴㄷ, ①, 일이삼, bullets) | ✓ |
+| Paragraph borders (one box for a run of paragraphs with the same ones) and shading | ✓ |
+| Tables: grid, merged cells, borders from the table style and the cells, shading, cell margins, row heights; header rows repeat and rows break across pages | ✓ |
+| Inline pictures (with crop) | ✓ |
+| Page breaks, keep-with-next, sections with their own page size and orientation | ✓ |
+| Default header and footer with PAGE and NUMPAGES fields | ✓ |
+| Equations (their text only), text boxes, floating pictures, columns, footnotes, first-page and even-page headers, charts | — |
+
 ## Fonts
 
 Office documents are mostly set in Calibri, Arial, Times New Roman and Courier New, and line breaks depend on their exact glyph widths. The library bundles fonts with the same metrics under `assets/officecanvas/fonts` (SIL Open Font License 1.1): Carlito for Calibri (regular and bold; italics are slanted) and Liberation Sans, Serif and Mono for the other three. Text in scripts these fonts don't cover, such as Hangul, falls back to the device's system fonts, so its line breaks can differ slightly from the original.
 
 ## How close is it
 
-Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.8; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D perspective. For `.ppt`, on a 75-slide lecture deck, 64 slides have every text baseline within 6 pt of LibreOffice's; most of the others are text shrunk to fit, which follows PowerPoint's steps rather than LibreOffice's way. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
+Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.8; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D perspective. For `.ppt`, on a 75-slide lecture deck, 64 slides have every text baseline within 6 pt of LibreOffice's; most of the others are text shrunk to fit, which follows PowerPoint's steps rather than LibreOffice's way. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. Word documents were compared the same way on 80 real `.docx` files (1,733 pages of forms, write-ups, notes and problem sets): the page count matches LibreOffice's in 45 of them and is within 10 % in 72. None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
 
 LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice disagree (symbol fonts, automatic numbering), the renderer follows PowerPoint.
 
@@ -135,7 +153,7 @@ LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice d
 
 ## 한국어 소개
 
-OfficeCanvas는 PPTX·PPT·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.3`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
+OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.3`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
 
 ## License
 

@@ -4,6 +4,7 @@
 OfficeCanvas.render(context, file)
         │  DocumentFormat.detect: zip with ppt/presentation.xml → PPTX
         │                         zip with Contents/content.hpf → HWPX
+        │                         zip with word/document.xml → DOCX
         │                         OLE2 with a "PowerPoint Document" stream → PPT
         │                         OLE2 with an "HWP Document File" header → HWP
         │                         XML with an <HWPML> root → HWP (laid out here)
@@ -12,7 +13,8 @@ OfficeCanvas.render(context, file)
         │                             │                        └── metafile.EmfRenderer / WmfRenderer
         ├── HWPX ── hwpx.HwpxParser ──┐
         ├── HWP ─── hwp.HwpParser ────┤
-        └── HWPML ─ hwp.HwpmlParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
+        ├── HWPML ─ hwp.HwpmlParser ──┤   (HWPML and DOCX laid out with hwpx.TextFlow)
+        └── DOCX ── docx.DocxParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
 ```
 
 Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` is `internal`.
@@ -50,6 +52,10 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 - `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
 
 **`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model; pictures stay in the file until drawn, as in `.ppt` (`HwpxDoc.resources`). `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
+
+**`hwpx/TextFlow`**: line and page layout for formats that save none (HWPML, DOCX): text broken into atoms (words, or single Hangul characters where those may break), measured with `HwpxRenderer.widthHu`, filled into lines (tab stops, a word wider than a line broken between characters), stacked at the paragraph's line spacing (Hangul's percent, or Word's multiple of a font's single line), and paged through `PageFlow` with `laidOut` set, so pages break only where `TextFlow` breaks them.
+
+**`docx`**: `DocxParser` reads WordprocessingML: styles (document defaults, table style, paragraph and character style chains), numbering, tab stops, paragraph borders and shading, tables, inline pictures (read from the package when drawn; the zip stays open in `HwpxDoc.resources`), page breaks, sections, headers and footers, and lays it all out with `TextFlow` into the Hangul model.
 
 **`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree). It reads streams from the file when asked for rather than loading the file whole; close it when done.
 
