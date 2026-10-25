@@ -73,7 +73,8 @@ internal object DocxParser {
         val underline: Boolean? = null, val strike: Boolean? = null, val color: Int? = null,
         val vert: Int? = null, val ascii: String? = null, val eastAsia: String? = null,
         val asciiTheme: String? = null, val eastAsiaTheme: String? = null, val caps: Boolean? = null,
-        val vanish: Boolean? = null, val scale: Int? = null, val spacing: Int? = null, val style: String? = null
+        val vanish: Boolean? = null, val scale: Int? = null, val spacing: Int? = null, val style: String? = null,
+        val background: Int? = null
     ) {
         /** These properties over [base]'s. */
         fun over(base: RunProps) = RunProps(
@@ -84,7 +85,8 @@ internal object DocxParser {
             if (eastAsia != null || eastAsiaTheme != null) eastAsia else base.eastAsia,
             if (ascii != null || asciiTheme != null) asciiTheme else base.asciiTheme,
             if (eastAsia != null || eastAsiaTheme != null) eastAsiaTheme else base.eastAsiaTheme,
-            caps ?: base.caps, vanish ?: base.vanish, scale ?: base.scale, spacing ?: base.spacing, style ?: base.style
+            caps ?: base.caps, vanish ?: base.vanish, scale ?: base.scale, spacing ?: base.spacing, style ?: base.style,
+            background ?: base.background
         )
     }
 
@@ -304,7 +306,8 @@ internal object DocxParser {
                 hangulFace = ea ?: latin, latinFace = latin ?: ea,
                 widthPercent = r.scale?.coerceIn(50, 200) ?: 100,
                 spacingPercent = r.spacing?.let { (it / 20f / size * 100).toInt().coerceIn(-50, 50) } ?: 0,
-                script = r.vert ?: 0
+                script = r.vert ?: 0,
+                backgroundArgb = r.background
             )
         }
 
@@ -856,7 +859,9 @@ internal object DocxParser {
                 caps = flag("caps"), vanish = flag("vanish"),
                 scale = rPr.child(W, "w")?.wAttr("val")?.toIntOrNull(),
                 spacing = rPr.child(W, "spacing")?.wAttr("val")?.toIntOrNull(),
-                style = rPr.child(W, "rStyle")?.wAttr("val")
+                style = rPr.child(W, "rStyle")?.wAttr("val"),
+                // A highlighter color wins over shading.
+                background = rPr.child(W, "highlight")?.wAttr("val")?.let { HIGHLIGHT[it] } ?: rPr.child(W, "shd")?.let { shade(it) }
             )
         }
 
@@ -897,6 +902,14 @@ internal object DocxParser {
     }
 
     // ---- helpers ------------------------------------------------------------
+
+    /** Word's highlighter colors. */
+    private val HIGHLIGHT = mapOf(
+        "yellow" to 0xFFFFFF00, "green" to 0xFF00FF00, "cyan" to 0xFF00FFFF, "magenta" to 0xFFFF00FF,
+        "blue" to 0xFF0000FF, "red" to 0xFFFF0000, "darkBlue" to 0xFF000080, "darkCyan" to 0xFF008080,
+        "darkGreen" to 0xFF008000, "darkMagenta" to 0xFF800080, "darkRed" to 0xFF800000, "darkYellow" to 0xFF808000,
+        "darkGray" to 0xFF808080, "lightGray" to 0xFFC0C0C0, "black" to 0xFF000000
+    ).mapValues { it.value.toInt() }
 
     /** A list number in Word's number format [fmt]. */
     internal fun numberText(n: Int, fmt: String): String {

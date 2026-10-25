@@ -115,6 +115,7 @@ internal object HwpxRenderer {
                 continue
             }
             if (gaps == 0) {
+                background(canvas, span, paint, x, paint.measureText(span.text), y)
                 canvas.drawText(span.text, x, y, paint)
                 x += paint.measureText(span.text)
                 index += span.text.length
@@ -128,18 +129,28 @@ internal object HwpxRenderer {
                 val isGap = if (distribute) at < lastGap - 1 else span.text[k] == ' ' && at < lastGap
                 if (!isGap) continue
                 val piece = span.text.substring(pieceStart, k + 1)
+                background(canvas, span, paint, x, paint.measureText(piece) + extra, y)
                 canvas.drawText(piece, x, y, paint)
                 x += paint.measureText(piece) + extra
                 pieceStart = k + 1
             }
             if (pieceStart < span.text.length) {
                 val piece = span.text.substring(pieceStart)
+                background(canvas, span, paint, x, paint.measureText(piece), y)
                 canvas.drawText(piece, x, y, paint)
                 x += paint.measureText(piece)
             }
             index += span.text.length
         }
         return 0
+    }
+
+    /** A span's background color behind [width] px of its text from [x], over the
+     *  font's ascent and descent around [baseline]. */
+    private fun background(canvas: Canvas, span: Span, paint: Paint, x: Float, width: Float, baseline: Float) {
+        val color = span.style.backgroundArgb ?: return
+        val fm = paint.fontMetrics
+        canvas.drawRect(x, baseline + fm.ascent, x + width, baseline + fm.descent, Paint().apply { this.color = color; style = Paint.Style.FILL })
     }
 
     /**

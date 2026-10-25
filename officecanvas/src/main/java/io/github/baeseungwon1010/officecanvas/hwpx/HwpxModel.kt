@@ -58,7 +58,9 @@ internal data class CharStyle(
     /** 자간: extra space between characters as a percent of the font size. */
     val spacingPercent: Int = 0,
     /** 1 for superscript, -1 for subscript. */
-    val script: Int = 0
+    val script: Int = 0,
+    /** A color behind the text (shading, a highlighter). */
+    val backgroundArgb: Int? = null
 )
 
 /** A stretch of a line in one character style. */
