@@ -46,7 +46,7 @@ class FuzzTool {
         val runs = System.getProperty("officecanvas.fuzz").orEmpty().toIntOrNull()
         assumeTrue("set -Pofficecanvas.fuzz=<copies per sample> to fuzz", runs != null)
         val seeds = listOf("hwp_samples/sample.hwp", "hwp_samples/sample_hwpml.hwp", "hwpx_samples/sample.hwpx",
-            "ppt_samples/sample_deck.ppt", "ppt_samples/feature_test.ppt", "pptx_samples/sample_deck.pptx", "pptx_samples/pptx_features.pptx", "docx_samples/sample.docx")
+            "ppt_samples/sample_deck.ppt", "ppt_samples/feature_test.ppt", "pptx_samples/sample_deck.pptx", "pptx_samples/pptx_features.pptx", "docx_samples/sample.docx", "docx_samples/features.docx")
         val rnd = Random(System.getProperty("officecanvas.fuzzSeed")?.toIntOrNull() ?: 1)
         val keepDir = File("build/fuzz").apply { mkdirs() }
         val out = File.createTempFile("fuzz", ".bin").apply { deleteOnExit() }

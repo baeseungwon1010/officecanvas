@@ -23,6 +23,7 @@ python3 make_sample_hwp.py "$RES/hwp_samples"
 python3 make_sample_hwpml.py "$RES/hwp_samples"
 mkdir -p "$RES/docx_samples"
 python3 make_sample_docx.py "$RES/docx_samples"
+python3 make_features_docx.py "$RES/docx_samples"
 python3 make_small_fixtures.py "$RES" "$tmp"
 
 cp "$tmp/sample_deck.pptx" "$tmp/feature_test.pptx" "$RES/pptx_samples/"

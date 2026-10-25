@@ -391,6 +391,38 @@ class MaliciousInputTest {
         assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
     }
 
+    private val dml = """xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"""" +
+        """ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"""" +
+        """ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""""
+
+    @Test
+    fun `DOCX groups and text boxes nested deep, absurd offsets and VML sizes`() {
+        val group = "<wpg:grpSp><wpg:grpSpPr><a:xfrm><a:off x=\"-9999999999999\" y=\"1\"/><a:ext cx=\"9223372036854775807\" cy=\"1\"/><a:chExt cx=\"0\" cy=\"-1\"/></a:xfrm></wpg:grpSpPr>"
+        val boxes = ("<w:p><w:r><w:drawing><wp:anchor simplePos=\"1\"><wp:simplePos x=\"-99999999999999999999\" y=\"1e30\"/><wp:extent cx=\"3600000\" cy=\"3600000\"/>" +
+            "<a:graphic><a:graphicData><wps:wsp><wps:txbx><w:txbxContent>").repeat(60) + "<w:p/>" +
+            "</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>".repeat(60)
+        val groups = "<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"3600000\" cy=\"3600000\"/><a:graphic><a:graphicData><wpg:wgp>" +
+            group.repeat(300) + "</wpg:grpSp>".repeat(300) + "</wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        val vml = "<w:p><w:r><w:pict><v:shape style=\"position:absolute;width:1e300pt;height:-5in;margin-left:NaNpt\"/><v:rect style=\"width:99999999in;height:1pt\"/></w:pict></w:r></w:p>"
+        val alternates = "<w:p><w:r>" + "<mc:AlternateContent><mc:Fallback><w:r>".repeat(100) + "</w:r></mc:Fallback></mc:AlternateContent>".repeat(100) + "</w:r></w:p>"
+        val body = "<w:p $dml/>" + boxes + groups + vml + alternates
+        var pages = 0
+        // (Read through, not refused: the parts are well formed.)
+        assertNull(survives(30) { pages = render(docx(body.replace("<w:p>", "<w:p $dml>"))) })
+        assertTrue(pages >= 1)
+    }
+
+    @Test
+    fun `DOCX equations nested deep, and ten thousand footnote references`() {
+        val math = "<w:p $dml><m:oMath>" + "<m:f><m:num>".repeat(200) + "<m:r><m:t>x</m:t></m:r>" + "</m:num></m:f>".repeat(200) + "</m:oMath></w:p>"
+        val notes = """<w:footnotes $w><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/><w:footnoteReference w:id="1"/><w:t>${"note ".repeat(500)}</w:t></w:r></w:p></w:footnote></w:footnotes>"""
+        val rels = """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="f" Type="footnotes" Target="footnotes.xml"/></Relationships>"""
+        val refs = "<w:p><w:r>${"<w:footnoteReference w:id=\"1\"/><w:endnoteReference w:id=\"1\"/>".repeat(10_000)}</w:r></w:p>"
+        var pages = 0
+        assertNull(survives(120) { pages = render(docx(math + refs, "word/footnotes.xml" to notes, "word/_rels/document.xml.rels" to rels), longSide = 32) })
+        assertTrue("$pages pages", pages <= OfficeCanvas.MAX_PAGES)
+    }
+
     // ---- HWPML (.hwp saved as XML) -------------------------------------------
 
     private fun hwpml(body: String, head: String = "") = File.createTempFile("evil", ".hwp").apply {
