@@ -270,7 +270,7 @@ internal object HwpxRenderer {
 
     private fun heightOf(el: HwpxElement): Long = el.extentHu
 
-    private val SERIF_FACES = listOf("바탕", "명조", "궁서", "batang", "myeongjo", "gungsuh", "times", "serif", "신명", "한양신명조", "함초롬바탕")
+    private val SERIF_FACES = listOf("바탕", "명조", "궁서", "batang", "myeongjo", "gungsuh", "times", "serif", "신명", "한양신명조", "함초롬바탕", "cambria", "georgia", "garamond", "palatino", "book antiqua", "century")
 
     private fun drawElement(canvas: Canvas, el: HwpxElement, dx: Long, dy: Long, zip: ZipFile?, scale: Double, depth: Int) {
         when (el) {

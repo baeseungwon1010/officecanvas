@@ -49,6 +49,7 @@ internal object DocxParser {
     private const val WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
     private const val PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
     private const val M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+    private const val VML_OFFICE = "urn:schemas-microsoft-com:office:office"
 
     /** Stands for the document's page count in headers and footers until it is known. */
     private const val PAGE_COUNT_MARK = ''
@@ -466,7 +467,7 @@ internal object DocxParser {
             runsOf(p, 0) { r, kind ->
                 when (kind) {
                     RunItem.PAGE_BREAK -> { atoms = ArrayList(); parts += atoms }
-                    else -> runAtoms(r, props, tabs, breakNonLatin, atoms, field, partRels, depth)
+                    else -> runAtoms(r, props, tabs, breakNonLatin, atoms, field, partRels, depth, width)
                 }
             }
             val shape = shape(props, width)
@@ -594,7 +595,7 @@ internal object DocxParser {
 
         private fun runAtoms(
             r: Element, props: ParaProps, tabs: List<TextFlow.TabStop>, breakNonLatin: Boolean,
-            out: MutableList<TextFlow.Atom>, field: FieldState, partRels: Map<String, String>, depth: Int
+            out: MutableList<TextFlow.Atom>, field: FieldState, partRels: Map<String, String>, depth: Int, width: Long
         ) {
             if (r.localName == "fldSimple") {
                 val instr = r.wAttr("instr")?.trim()?.uppercase().orEmpty()
@@ -639,6 +640,11 @@ internal object DocxParser {
                         text.addText(fixSymbolText(code.toChar().toString(), c.wAttr("font")), style, breakNonLatin, out)
                     }
                     "drawing" -> if (!skip) drawing(c, partRels)?.let { out += text.inline(it, style) }
+                    // A VML horizontal rule (pandoc's "---"): a gray line across the column.
+                    "pict" -> if (!skip && c.children().any { it.localName == "rect" && it.getAttributeNS(VML_OFFICE, "hr") in setOf("t", "true") }) {
+                        val w = (width - (props.left ?: 0) - (props.right ?: 0)).coerceAtLeast(100)
+                        out += text.inline(HwpxElement.Drawing(0, 0, w, 150, DrawingKind.RECTANGLE, lineArgb = null, fillArgb = 0xFFA0A0A0.toInt()), style)
+                    }
                 }
             }
         }
