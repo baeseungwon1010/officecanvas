@@ -455,7 +455,7 @@ internal object DocxParser {
             var atoms = ArrayList<TextFlow.Atom>()
             parts += atoms
             val tabs = props.tabs.orEmpty().map { (pos, align) ->
-                TextFlow.TabStop(pos - (props.left ?: 0), when (align) { "right", "end" -> ParaAlign.RIGHT; "center" -> ParaAlign.CENTER; else -> ParaAlign.LEFT })
+                TextFlow.TabStop(pos, when (align) { "right", "end" -> ParaAlign.RIGHT; "center" -> ParaAlign.CENTER; else -> ParaAlign.LEFT })
             }
             // The list number (or bullet) and what follows it.
             level(props)?.let { lvl -> numberAtoms(props, lvl, markProps, tabs, breakNonLatin, atoms) }
@@ -534,8 +534,11 @@ internal object DocxParser {
                     "distribute", "thaiDistribute" -> ParaAlign.DISTRIBUTE
                     else -> ParaAlign.LEFT
                 },
+                // Word hangs the first line out to the left of the indent; TextFlow
+                // (like Hangul) starts the first line at the left and moves the others in.
                 indent = props.firstLine ?: props.hanging?.let { -it } ?: 0,
-                left = (props.left ?: 0).coerceIn(-width, width), right = (props.right ?: 0).coerceIn(-width, width),
+                left = ((props.left ?: 0) - (props.hanging?.takeIf { props.firstLine == null } ?: 0)).coerceIn(-width, width),
+                right = (props.right ?: 0).coerceIn(-width, width),
                 prev = (props.before ?: 0).coerceIn(0, 200_000), next = (props.after ?: 0).coerceIn(0, 200_000),
                 spacing = spacing, breakNonLatin = props.wordWrap == false
             )
@@ -819,7 +822,9 @@ internal object DocxParser {
                 "right", "end" -> width - total
                 else -> ind
             }
-            return HwpxElement.Table(x, 0, total, heights.sum(), cols, heights, grid)
+            // Rows marked as a header, from the first on, repeat on each page.
+            val headerRows = rowsXml.takeWhile { tr -> tr.child(W, "trPr")?.child(W, "tblHeader")?.let { it.wAttr("val").isTrue() } == true }.size
+            return HwpxElement.Table(x, 0, total, heights.sum(), cols, heights, grid, headerRows, rowsBreak = true)
         }
 
         private fun mergeBorders(base: CellBorders?, own: CellBorders?): CellBorders? {
