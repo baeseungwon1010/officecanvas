@@ -120,7 +120,8 @@ internal class TextFlow {
      * [baseStyle] sizes an empty paragraph's line. [tabStops] (from the column's
      * left) place tabs; without them a tab takes its own width.
      */
-    fun lay(atoms: List<Atom>, shape: ParaShape, width: Long, baseStyle: CharStyle, baseLine: Long? = null): Laid {
+    fun lay(input: List<Atom>, shape: ParaShape, width: Long, baseStyle: CharStyle, baseLine: Long? = null): Laid {
+        val atoms = input.toMutableList()
         val baseHeight = (baseStyle.sizePt * 100).toLong()
         val baseSingle = baseLine ?: (baseHeight * 6 / 5)
         val lines = ArrayList<HwpxElement>()
@@ -140,6 +141,8 @@ internal class TextFlow {
                     a = Atom(listOf(Span("\t", a.spans[0].style, w.toLong())), w, 0f, a.height, line = a.line)
                 }
                 if (lineAtoms.isNotEmpty() && used + a.width - a.trailing > avail) break
+                // A word wider than a whole line is broken between its characters.
+                if (lineAtoms.isEmpty() && a.width - a.trailing > avail && splitWord(atoms, i)) continue
                 lineAtoms += a
                 used += a.width
                 i++
@@ -187,13 +190,29 @@ internal class TextFlow {
         return Laid(lines, y + shape.next, bottom + shape.next, empty, lead = shape.prev)
     }
 
+    /** Replaces the text atom at [i] with one atom per character; false when it
+     *  can't be split (an object, a tab, a single character). */
+    private fun splitWord(atoms: MutableList<Atom>, i: Int): Boolean {
+        val a = atoms[i]
+        val span = a.spans.singleOrNull()?.takeIf { it.inline == null && it.tabHu == null && it.text.length > 1 } ?: return false
+        val pieces = span.text.map { c ->
+            val w = measure(c.toString(), span.style)
+            Atom(listOf(span.copy(text = c.toString())), w, if (c == ' ') w else 0f, a.height, line = a.line)
+        }
+        atoms.removeAt(i)
+        atoms.addAll(i, pieces)
+        return true
+    }
+
     /** The width of the tab at [i] starting [pos] from the column's left: to the
      *  next stop past it (the hanging indent's edge counts as one), or the next
      *  default stop; a centered or right stop leaves room for the text after it,
      *  up to the next tab. */
     private fun tabWidth(atoms: List<Atom>, i: Int, pos: Float, shape: ParaShape): Float {
         val tab = atoms[i]
-        val implicit = if (shape.left > pos + 1) listOf(TabStop(shape.left)) else emptyList()
+        // The edge the other lines start at (a hanging indent's) is a stop too.
+        val hang = shape.left + (-shape.indent).coerceAtLeast(0)
+        val implicit = if (hang > pos + 1) listOf(TabStop(hang)) else emptyList()
         val stop = (tab.stops.orEmpty() + implicit).filter { it.pos > pos + 1 }.minByOrNull { it.pos }
             ?: return (((pos / tab.defaultTab).toLong() + 1) * tab.defaultTab - pos).coerceAtLeast(0f)
         var follow = 0f
