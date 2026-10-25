@@ -123,6 +123,13 @@ internal class PageFlow(private val bodyHeightHu: Long) {
         settlePending(y)
     }
 
+    /** Adds [el] to page [page] where it is, outside the flow (an object placed by
+     *  offsets on a page already started), under everything else when [behind]. */
+    fun put(page: Int, el: HwpxElement, behind: Boolean = false) {
+        val p = pages.getOrNull(page) ?: return
+        if (behind) p.add(0, el) else p += el
+    }
+
     /** Starts a new page unless the current one is still empty. */
     fun breakPage() {
         if (pages.last().isNotEmpty()) newPage()

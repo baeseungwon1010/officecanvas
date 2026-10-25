@@ -189,7 +189,9 @@ internal sealed class HwpxElement {
         val script: String,
         val sizeHu: Long = 1000,
         val colorArgb: Int = 0xFF000000.toInt(),
-        val baselinePercent: Int = 85
+        val baselinePercent: Int = 85,
+        /** The formula already parsed (Word's equations), in place of [script]. */
+        val tree: EqNode? = null
     ) : HwpxElement()
 }
 
@@ -216,7 +218,9 @@ internal data class TableCell(
     /** Borders and shading; null draws the default thin grid. */
     val borderFill: BorderFill? = null,
     /** 0 top, 1 middle, 2 bottom: where the content sits in a taller cell. */
-    val vAlign: Int = 0
+    val vAlign: Int = 0,
+    /** Content past the cell's edges is cut off (a row of exact height). */
+    val clip: Boolean = false
 ) {
     val runs: List<HwpxElement.TextRun> get() = elements.filterIsInstance<HwpxElement.TextRun>()
 }

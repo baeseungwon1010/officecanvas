@@ -317,10 +317,12 @@ internal object HwpxRenderer {
             val dy = when (p.cell.vAlign) { 1 -> room / 2; 2 -> room; else -> 0L }
             // Lines broken here (see drawWrapped) push the rest of the cell down.
             var pushed = 0L
+            if (p.cell.clip) { canvas.save(); canvas.clipRect(p.rect) }
             for (el in p.cell.elements.sortedBy { it.yHu }) {
                 if (el is HwpxElement.TextRun) pushed += drawText(canvas, el, p.left.toDouble(), (p.top + dy + pushed).toDouble(), scale, zip, depth + 1)
                 else drawElement(canvas, el, p.left, p.top + dy + pushed, zip, scale, depth + 1)
             }
+            if (p.cell.clip) canvas.restore()
         }
         for (p in placed) {
             val bf = p.cell.borderFill
@@ -377,7 +379,7 @@ internal object HwpxRenderer {
         val boxW = (eq.widthHu * scale).toFloat()
         val boxH = (eq.heightHu * scale).toFloat()
         if (boxW < 1f || boxH < 1f) return
-        val laid = EquationLayout(eq.colorArgb).layout(EquationParser.parse(eq.script), (eq.sizeHu * scale).toFloat())
+        val laid = EquationLayout(eq.colorArgb).layout(eq.tree ?: EquationParser.parse(eq.script), (eq.sizeHu * scale).toFloat())
         if (laid.width <= 0f || laid.height <= 0f) return
         val k = minOf(boxW / laid.width, boxH / laid.height, 1.25f).coerceAtLeast(0.2f)
         val baseline = ((eq.yHu * scale) + boxH * eq.baselinePercent / 100f).toFloat()

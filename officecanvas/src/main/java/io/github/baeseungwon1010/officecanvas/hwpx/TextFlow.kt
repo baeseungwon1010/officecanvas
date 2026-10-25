@@ -20,6 +20,9 @@ internal class TextFlow {
         /** Word: a multiple of the font's single line (ascent, descent and gap),
          *  the text at the bottom of its line. */
         data class Multiple(val factor: Float) : LineSpacing()
+        /** Word's "at least": the font's single line, or this pitch when that is
+         *  taller, the text at the bottom. */
+        data class AtLeastSingle(val hu: Long) : LineSpacing()
     }
 
     /** How a paragraph is set. Lengths in HWPUNIT; [indent] is the first line's
@@ -156,10 +159,15 @@ internal class TextFlow {
             val spans = merge(lineAtoms.flatMap { it.spans })
             // The line's box: [lineHeight] tall, text on [baseline] from its top.
             val (lineHeight, pitch, baseline) = when (val s = shape.spacing) {
+                // The text sits at the bottom of a taller line; its descent is about
+                // a fifth of the single line. An object stands on the baseline, so
+                // the descent goes below it too.
                 is LineSpacing.Multiple -> {
-                    val h = maxOf((single * s.factor).toLong(), objectHeight)
-                    // The text sits at the bottom of a taller line; its descent is
-                    // about a fifth of the single line.
+                    val h = maxOf((single * s.factor).toLong(), if (objectHeight > 0) objectHeight + single / 5 else 0)
+                    Triple(h, h, h - single / 5)
+                }
+                is LineSpacing.AtLeastSingle -> {
+                    val h = maxOf(single, s.hu, if (objectHeight > 0) objectHeight + single / 5 else 0)
                     Triple(h, h, h - single / 5)
                 }
                 else -> {
@@ -175,7 +183,8 @@ internal class TextFlow {
                     else -> 0L
                 }
                 // Hangul sets it at the line's top; Word on the line's bottom.
-                lines += obj.at(ox, if (shape.spacing is LineSpacing.Multiple) y + lineHeight - objectHeight else y)
+                val wordLine = shape.spacing is LineSpacing.Multiple || shape.spacing is LineSpacing.AtLeastSingle
+                lines += obj.at(ox, if (wordLine) y + lineHeight - single / 5 - objectHeight else y)
             } else if (spans.isNotEmpty()) {
                 lines += HwpxElement.TextRun(
                     xHu = x, yHu = y, widthHu = avail, heightHu = lineHeight, spans = spans,
@@ -233,7 +242,7 @@ internal class TextFlow {
         is LineSpacing.Between -> height + s.hu
         is LineSpacing.AtLeast -> maxOf(height, s.hu)
         is LineSpacing.Percent -> height + textHeight * (s.percent - 100).coerceAtLeast(0) / 100
-        is LineSpacing.Multiple -> height
+        is LineSpacing.Multiple, is LineSpacing.AtLeastSingle -> height
     }
 
     /**
@@ -246,13 +255,20 @@ internal class TextFlow {
     fun place(flow: PageFlow, laid: Laid, y: Long, bodyHeight: Long): Pair<Long, Long> {
         var base = y
         var anchorY: Long? = null
+        anchorPage = flow.page
         // Drawings (a paragraph's shading and borders) go with the line after them:
-        // whether to start a page is decided by that line.
+        // whether to start a page is decided by that line. A drawing reaching below
+        // that line (a text box set in the flow) is placed as a line of its own.
         var i = 0
         val lines = laid.lines
+        fun decorates(k: Int): Boolean {
+            val d = lines[k] as? HwpxElement.Drawing ?: return false
+            val next = (k + 1 until lines.size).firstOrNull { lines[it] !is HwpxElement.Drawing }?.let { lines[it] } ?: return d.heightHu < 2000
+            return d.yHu + d.heightHu <= next.yHu + next.extentHu
+        }
         while (i < lines.size) {
             var k = i
-            while (k < lines.size && lines[k] is HwpxElement.Drawing) k++
+            while (k < lines.size && decorates(k)) k++
             val line = lines.getOrNull(k)
             if (line != null && line !is HwpxElement.Table) {
                 val top = base + line.yHu
@@ -261,9 +277,9 @@ internal class TextFlow {
             for (j in i..minOf(k, lines.size - 1)) {
                 val el = lines[j]
                 val top = base + el.yHu
-                if (anchorY == null && el !is HwpxElement.Drawing) anchorY = top
                 val pageBefore = flow.page
                 flow.add(el.at(el.xHu, top), laidOut = true)
+                if (anchorY == null && el !is HwpxElement.Drawing) { anchorY = top; anchorPage = flow.page }
                 // A table that ran over pages: the paragraph goes on below its last piece.
                 if (el is HwpxElement.Table && flow.page != pageBefore) base = flow.lastTableBottom - el.yHu - el.heightHu
             }
@@ -271,6 +287,10 @@ internal class TextFlow {
         }
         return (anchorY ?: base) to base + laid.height
     }
+
+    /** The page the last [place]d paragraph's first line went on. */
+    var anchorPage = 0
+        private set
 
     companion object {
         /** Lines in one paragraph or cell, whatever a file claims. */
