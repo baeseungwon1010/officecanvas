@@ -129,11 +129,14 @@ Word saves no line breaks or page breaks, so a `.docx` is laid out here: lines b
 | Tab stops (left, center, right) and the default stops | ✓ |
 | List numbering in Word's formats (decimal, letters, roman, 가나다, ㄱㄴㄷ, ①, 일이삼, bullets) | ✓ |
 | Paragraph borders (one box for a run of paragraphs with the same ones) and shading | ✓ |
-| Tables: grid, merged cells, borders from the table style and the cells, shading, cell margins, row heights; header rows repeat and rows break across pages | ✓ |
-| Inline pictures (with crop) | ✓ |
-| Page breaks, keep-with-next, sections with their own page size and orientation | ✓ |
-| Default header and footer with PAGE and NUMPAGES fields | ✓ |
-| Equations (their text only), text boxes, floating pictures, columns, footnotes, first-page and even-page headers, charts | — |
+| Tables: grid, merged cells, borders from the table style and the cells, shading, cell margins, row heights (an exact one cuts off what doesn't fit); header rows repeat and rows break across pages | ✓ |
+| Pictures, inline and floating (placed from the page, the margins or their paragraph; text they wrap goes on below them) | ✓ |
+| Shapes (rectangles, rounded rectangles, ellipses, lines) with their fill and outline, text boxes, groups; older VML text boxes and pictures | ✓ |
+| Equations, typeset from their structure (fractions, scripts, roots, sums and integrals, delimiters, matrices, accents, functions, limits) | ✓ |
+| Footnotes at the bottom of their page, endnotes after the text | ✓ |
+| Page breaks, keep-with-next, sections with their own page size and orientation, page borders | ✓ |
+| Headers and footers: default, first page and even pages, kept from the previous section; PAGE (with its restart and format) and NUMPAGES fields | ✓ |
+| Text wrapping beside a floating object, columns, charts, rotated shapes | — |
 
 ## Fonts
 
@@ -153,7 +156,7 @@ LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice d
 
 ## 한국어 소개
 
-OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.3`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
+OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·글상자·수식·각주·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.3`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
 
 ## License
 
