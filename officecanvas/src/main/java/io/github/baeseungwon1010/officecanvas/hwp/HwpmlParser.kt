@@ -3,21 +3,18 @@ package io.github.baeseungwon1010.officecanvas.hwp
 import io.github.baeseungwon1010.officecanvas.hwpx.Border
 import io.github.baeseungwon1010.officecanvas.hwpx.BorderFill
 import io.github.baeseungwon1010.officecanvas.hwpx.CharStyle
-import io.github.baeseungwon1010.officecanvas.hwpx.DEFAULT_TAB_HU
 import io.github.baeseungwon1010.officecanvas.hwpx.GridSpan
 import io.github.baeseungwon1010.officecanvas.hwpx.HWPUNIT_PER_INCH
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxDoc
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxElement
 import io.github.baeseungwon1010.officecanvas.hwpx.HwpxPage
-import io.github.baeseungwon1010.officecanvas.hwpx.HwpxRenderer
 import io.github.baeseungwon1010.officecanvas.hwpx.PageFlow
 import io.github.baeseungwon1010.officecanvas.hwpx.ParaAlign
-import io.github.baeseungwon1010.officecanvas.hwpx.Span
 import io.github.baeseungwon1010.officecanvas.hwpx.TableCell
+import io.github.baeseungwon1010.officecanvas.hwpx.TextFlow
 import io.github.baeseungwon1010.officecanvas.hwpx.at
 import io.github.baeseungwon1010.officecanvas.hwpx.extentHu
 import io.github.baeseungwon1010.officecanvas.hwpx.gridSizes
-import io.github.baeseungwon1010.officecanvas.hwpx.inlineSpan
 import io.github.baeseungwon1010.officecanvas.hwpx.widthHu
 import io.github.baeseungwon1010.officecanvas.util.Limits
 import io.github.baeseungwon1010.officecanvas.util.SafeXml
@@ -71,18 +68,9 @@ internal object HwpmlParser {
 
     // ---- definitions ---------------------------------------------------------
 
-    private class ParaShape(
-        val align: ParaAlign = ParaAlign.JUSTIFY,
-        val indent: Long = 0, val left: Long = 0, val right: Long = 0,
-        val prev: Long = 0, val next: Long = 0,
-        val spacingType: String = "Percent", val spacing: Long = 160,
-        /** Hangul (and other non-Latin) words may break between any two characters. */
-        val breakNonLatin: Boolean = true
-    )
-
     private class Head(head: Element?) {
         val styles = HashMap<String, CharStyle>()
-        val paras = HashMap<String, ParaShape>()
+        val paras = HashMap<String, TextFlow.ParaShape>()
         val borderFills = HashMap<String, BorderFill>()
 
         init {
@@ -117,7 +105,8 @@ internal object HwpmlParser {
             for (ps in table?.child("PARASHAPELIST")?.all("PARASHAPE").orEmpty()) {
                 val m = ps.child("PARAMARGIN")
                 fun margin(name: String) = (m?.int(name) ?: 0).toLong().coerceIn(-100_000, 100_000)
-                paras[ps.getAttribute("Id")] = ParaShape(
+                val spacing = (m?.int("LineSpacing") ?: 160).toLong().coerceIn(0, 100_000)
+                paras[ps.getAttribute("Id")] = TextFlow.ParaShape(
                     align = when (ps.getAttribute("Align")) {
                         "Left" -> ParaAlign.LEFT
                         "Right" -> ParaAlign.RIGHT
@@ -127,8 +116,12 @@ internal object HwpmlParser {
                     },
                     indent = margin("Indent"), left = margin("Left"), right = margin("Right"),
                     prev = margin("Prev").coerceAtLeast(0), next = margin("Next").coerceAtLeast(0),
-                    spacingType = m?.getAttribute("LineSpacingType").orEmpty().ifEmpty { "Percent" },
-                    spacing = (m?.int("LineSpacing") ?: 160).toLong().coerceIn(0, 100_000),
+                    spacing = when (m?.getAttribute("LineSpacingType")) {
+                        "Fixed" -> TextFlow.LineSpacing.Exactly(spacing)
+                        "BetweenLines" -> TextFlow.LineSpacing.Between(spacing)
+                        "AtLeast" -> TextFlow.LineSpacing.AtLeast(spacing)
+                        else -> TextFlow.LineSpacing.Percent(spacing)
+                    },
                     breakNonLatin = ps.getAttribute("BreakNonLatinWord") != "false"
                 )
             }
@@ -147,25 +140,23 @@ internal object HwpmlParser {
         }
 
         fun style(id: String) = styles[id] ?: styles["0"] ?: CharStyle()
-        fun para(id: String) = paras[id] ?: paras["0"] ?: ParaShape()
+        fun para(id: String) = paras[id] ?: paras["0"] ?: TextFlow.ParaShape()
     }
 
     // ---- layout --------------------------------------------------------------
 
-    /** A paragraph laid out from its own top: its lines (and objects set in them),
-     *  its floating objects, where the next paragraph starts ([height]) and where
-     *  its last line ends ([bottom]: a cell is sized to that, not to the line
-     *  spacing after it). [empty]: no text or object at all. */
-    private class Laid(val lines: List<HwpxElement>, val floats: List<Floating>, val height: Long, val bottom: Long, val empty: Boolean)
+    /** A paragraph laid out ([TextFlow.Laid]) with its floating objects. */
+    private class Laid(val flow: TextFlow.Laid, val floats: List<Floating>) {
+        val height get() = flow.height
+        val bottom get() = flow.bottom
+        val empty get() = flow.empty && floats.isEmpty()
+    }
 
     /** An object placed by offsets, anchored at its paragraph's first line. */
     private class Floating(val obj: HwpxElement, val pos: Element, val takesLines: Boolean)
 
-    /** One unit of text that isn't broken: a word (with the spaces after it), a
-     *  single Hangul character, a tab, an object or a forced line break. */
-    private class Atom(val spans: List<Span>, val width: Float, val trailing: Float, val height: Long, val lineBreak: Boolean = false)
-
     private class Section(val head: Head, val section: Element) {
+        private val text = TextFlow()
         private var pageW = 59528L
         private var pageH = 84188L
         private var bodyX = 8504L
@@ -197,26 +188,11 @@ internal object HwpmlParser {
                 if (flow.full) break
                 if (p.getAttribute("PageBreak") == "true") { flow.breakPage(); y = 0 }
                 val laid = paragraph(p, bodyW, 0)
-                // Lines go down the page and on to the next one when it is full;
-                // [base] is where the paragraph's top falls on the current page.
-                var base = y
-                var anchorY: Long? = null
-                for (line in laid.lines) {
-                    var top = base + line.yHu
-                    if (top + line.extentHu > bodyH && top > 0 && line !is HwpxElement.Table) {
-                        flow.breakPage(); base = -line.yHu; top = 0
-                    }
-                    if (anchorY == null) anchorY = top
-                    val pageBefore = flow.page
-                    flow.add(line.at(line.xHu, top))
-                    // A table that ran over pages: the paragraph goes on below its last piece.
-                    if (line is HwpxElement.Table && flow.page != pageBefore) base = flow.lastTableBottom - line.yHu - line.heightHu
-                }
-                val start = anchorY ?: base
+                val (anchorY, next) = text.place(flow, laid.flow, y, bodyH)
                 for (f in laid.floats) {
-                    flow.add(placeFloat(f, start), floating = true, takesLines = f.takesLines)
+                    flow.add(placeFloat(f, anchorY), floating = true, takesLines = f.takesLines)
                 }
-                y = base + laid.height
+                y = next
             }
             return flow.finish().map { (_, elements) -> HwpxPage(pageW, pageH, elements, bodyX, bodyY) }
         }
@@ -256,20 +232,20 @@ internal object HwpmlParser {
          */
         fun paragraph(p: Element, width: Long, depth: Int): Laid {
             val shape = head.para(p.getAttribute("ParaShape"))
-            val atoms = ArrayList<Atom>()
+            val atoms = ArrayList<TextFlow.Atom>()
             val floats = ArrayList<Floating>()
             var firstStyle: CharStyle? = null
-            for (text in p.all("TEXT")) {
-                val style = head.style(text.getAttribute("CharShape"))
+            for (t in p.all("TEXT")) {
+                val style = head.style(t.getAttribute("CharShape"))
                 if (firstStyle == null) firstStyle = style
-                for (child in text.children()) {
+                for (child in t.children()) {
                     when (child.tagName) {
                         "CHAR" -> textAtoms(child, style, shape.breakNonLatin, atoms)
                         "TABLE" -> table(child, depth + 1)?.let { obj ->
                             val so = child.child("SHAPEOBJECT")
                             val pos = so?.child("POSITION")
                             if (pos == null || pos.getAttribute("TreatAsChar") == "true") {
-                                atoms += Atom(listOf(inlineSpan(obj, style)), obj.widthHu.toFloat(), 0f, obj.extentHu)
+                                atoms += text.inline(obj, style)
                             } else {
                                 floats += Floating(obj, pos, so.getAttribute("TextWrap") == "TopAndBottom")
                             }
@@ -277,118 +253,19 @@ internal object HwpmlParser {
                     }
                 }
             }
-            val baseStyle = firstStyle ?: CharStyle()
-            val baseHeight = (baseStyle.sizePt * 100).toLong()
-            val lines = ArrayList<HwpxElement>()
-            var y = shape.prev
-            var bottom = y
-            var i = 0
-            var first = true
-            do {
-                val x = shape.left + if (first) shape.indent.coerceAtLeast(0) else (-shape.indent).coerceAtLeast(0)
-                val avail = (width - x - shape.right).coerceAtLeast(500)
-                // Fill the line: whole atoms while they fit (trailing spaces may hang
-                // past the edge); a lone atom too wide for any line goes in anyway.
-                val start = i
-                var used = 0f
-                while (i < atoms.size && !atoms[i].lineBreak) {
-                    val a = atoms[i]
-                    if (i > start && used + a.width - a.trailing > avail) break
-                    used += a.width
-                    i++
-                }
-                val forced = i < atoms.size && atoms[i].lineBreak
-                val lineAtoms = atoms.subList(start, i)
-                if (forced) i++
-                val textHeight = lineAtoms.filter { a -> a.spans.none { it.inline != null } }.maxOfOrNull { it.height } ?: baseHeight
-                val objectHeight = lineAtoms.filter { a -> a.spans.any { it.inline != null } }.maxOfOrNull { it.height } ?: 0L
-                val height = maxOf(textHeight, objectHeight)
-                val last = i >= atoms.size
-                val spans = merge(lineAtoms.flatMap { it.spans })
-                if (lineAtoms.size == 1 && objectHeight > 0 && lineAtoms[0].spans.size == 1) {
-                    // An object alone on its line is placed on its own.
-                    val obj = lineAtoms[0].spans[0].inline!!
-                    val ox = x + when (shape.align) {
-                        ParaAlign.CENTER -> ((avail - obj.widthHu) / 2).coerceAtLeast(0)
-                        ParaAlign.RIGHT -> (avail - obj.widthHu).coerceAtLeast(0)
-                        else -> 0L
-                    }
-                    lines += obj.at(ox, y)
-                } else if (spans.isNotEmpty()) {
-                    lines += HwpxElement.TextRun(
-                        xHu = x, yHu = y, widthHu = avail, heightHu = height, spans = spans,
-                        baselineHu = height - textHeight * 15 / 100, align = shape.align, lastLine = last || forced
-                    )
-                }
-                bottom = y + height
-                y += pitch(shape, textHeight, height)
-                first = false
-            } while (i < atoms.size && lines.size < MAX_LINES)
-            val empty = atoms.none { a -> a.spans.any { it.inline != null || it.text.isNotBlank() } } && floats.isEmpty()
-            return Laid(lines, floats, y + shape.next, bottom + shape.next, empty)
+            return Laid(text.lay(atoms, shape, width, firstStyle ?: CharStyle()), floats)
         }
 
-        /** Line pitch: Hangul's line spacing is a percent of the text height, a
-         *  fixed pitch, extra space between lines, or a minimum. */
-        private fun pitch(shape: ParaShape, textHeight: Long, height: Long): Long = when (shape.spacingType) {
-            "Fixed" -> maxOf(shape.spacing, 1)
-            "BetweenLines" -> height + shape.spacing
-            "AtLeast" -> maxOf(height, shape.spacing)
-            else -> height + textHeight * (shape.spacing - 100).coerceAtLeast(0) / 100
-        }
-
-        private val widths = HashMap<Pair<CharStyle, String>, Float>()
-
-        /** Measured as drawn; single characters (most Hangul atoms) are remembered. */
-        private fun measure(text: String, style: CharStyle): Float {
-            if (text.length > 2) return HwpxRenderer.widthHu(Span(text, style))
-            return widths.getOrPut(style to text) { HwpxRenderer.widthHu(Span(text, style)) }
-        }
-
-        /** Breaks a <CHAR>'s text into atoms: words with their trailing spaces, and
-         *  Hangul or Han characters one by one when those may break anywhere. */
-        private fun textAtoms(char: Element, style: CharStyle, breakNonLatin: Boolean, out: MutableList<Atom>) {
-            val height = (style.sizePt * 100).toLong()
-            fun add(text: String) {
-                if (text.isEmpty() || out.size >= MAX_ATOMS) return
-                val trimmed = text.trimEnd(' ')
-                val width = measure(text, style)
-                val trailing = if (trimmed.length < text.length) width - measure(trimmed, style) else 0f
-                out += Atom(listOf(Span(text, style)), width, trailing, height)
-            }
+        /** A <CHAR>'s text and the controls in it (tabs, line breaks, special spaces). */
+        private fun textAtoms(char: Element, style: CharStyle, breakNonLatin: Boolean, out: MutableList<TextFlow.Atom>) {
             for (node in char.childNodes.toList()) {
                 when {
-                    node.nodeType == Node.TEXT_NODE || node.nodeType == Node.CDATA_SECTION_NODE -> {
-                        val text = node.nodeValue.replace('\n', ' ').replace('\r', ' ')
-                        var from = 0
-                        var k = 0
-                        while (k < text.length) {
-                            val c = text[k]
-                            if (breakNonLatin && isNonLatin(c)) {
-                                add(text.substring(from, k))
-                                var end = k + 1
-                                while (end < text.length && text[end] == ' ') end++
-                                add(text.substring(k, end))
-                                from = end; k = end
-                                continue
-                            }
-                            if (c == ' ') {
-                                var end = k + 1
-                                while (end < text.length && text[end] == ' ') end++
-                                add(text.substring(from, end))
-                                from = end; k = end
-                                continue
-                            }
-                            k++
-                        }
-                        add(text.substring(from))
-                    }
-                    node is Element && node.tagName == "TAB" ->
-                        out += Atom(listOf(Span("\t", style, DEFAULT_TAB_HU)), DEFAULT_TAB_HU.toFloat(), 0f, height)
-                    node is Element && node.tagName == "LINEBREAK" ->
-                        out += Atom(emptyList(), 0f, 0f, height, lineBreak = true)
-                    node is Element && (node.tagName == "NBSPACE" || node.tagName == "FWSPACE") -> add(" ")
-                    node is Element && node.tagName == "HYPEN" -> add("-")
+                    node.nodeType == Node.TEXT_NODE || node.nodeType == Node.CDATA_SECTION_NODE ->
+                        text.addText(node.nodeValue.replace('\n', ' ').replace('\r', ' '), style, breakNonLatin, out)
+                    node is Element && node.tagName == "TAB" -> out += text.tab(style)
+                    node is Element && node.tagName == "LINEBREAK" -> out += text.lineBreak(style)
+                    node is Element && (node.tagName == "NBSPACE" || node.tagName == "FWSPACE") -> text.addText(" ", style, breakNonLatin, out)
+                    node is Element && node.tagName == "HYPEN" -> text.addText("-", style, breakNonLatin, out)
                 }
             }
         }
@@ -424,7 +301,7 @@ internal object HwpmlParser {
                 val elements = ArrayList<HwpxElement>()
                 for (p in list?.all("P").orEmpty()) {
                     val laid = paragraph(p, inner, depth)
-                    laid.lines.forEach { elements += it.at(it.xHu + margin("Left"), it.yHu + y + margin("Top")) }
+                    laid.flow.lines.forEach { elements += it.at(it.xHu + margin("Left"), it.yHu + y + margin("Top")) }
                     // Objects floating in a cell are placed from its paragraph, and the
                     // cell is made tall enough for them.
                     var reach = 0L
@@ -436,7 +313,7 @@ internal object HwpmlParser {
                     bottom = maxOf(y + laid.bottom, reach)
                     y = maxOf(y + laid.height, reach)
                     if (!laid.empty) empty = false
-                    if (elements.size > MAX_LINES) break
+                    if (elements.size > TextFlow.MAX_LINES) break
                 }
                 // A cell with nothing in it keeps its declared height (forms use thin
                 // empty rows as spacers); one with content is at least as tall as it.
@@ -460,20 +337,6 @@ internal object HwpmlParser {
         }
     }
 
-    /** Consecutive text spans in one style, joined. */
-    private fun merge(spans: List<Span>): List<Span> {
-        val out = ArrayList<Span>(spans.size)
-        for (s in spans) {
-            val prev = out.lastOrNull()
-            if (prev != null && prev.style == s.style && prev.tabHu == null && prev.inline == null && s.tabHu == null && s.inline == null) {
-                out[out.size - 1] = prev.copy(text = prev.text + s.text)
-            } else out += s
-        }
-        return out
-    }
-
-    private fun isNonLatin(c: Char) = c.code in 0x1100..0x11FF || c.code in 0x3000..0x9FFF || c.code in 0xAC00..0xD7A3 || c.code in 0xF900..0xFAFF || c.code in 0xFF00..0xFFEF
-
     /** COLORREF as a decimal number (0x00BBGGRR); a value with the top byte set means none. */
     private fun colorRef(value: String): Int? {
         val v = value.trim().toLongOrNull() ?: return null
@@ -481,12 +344,6 @@ internal object HwpmlParser {
         val r = (v and 0xFF).toInt(); val g = ((v shr 8) and 0xFF).toInt(); val b = ((v shr 16) and 0xFF).toInt()
         return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
-
-    /** Lines in one paragraph or cell, whatever a file claims. */
-    private const val MAX_LINES = 20_000
-
-    /** Words and characters kept from one paragraph (far more than fit on the pages it may have). */
-    private const val MAX_ATOMS = 200_000
 
     private fun org.w3c.dom.NodeList.toList(): List<Node> = (0 until length).map { item(it) }
     private fun Element.children(): List<Element> = childNodes.toList().filterIsInstance<Element>()
