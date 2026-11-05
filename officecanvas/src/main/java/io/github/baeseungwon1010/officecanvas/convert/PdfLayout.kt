@@ -88,7 +88,7 @@ internal object PdfLayout {
         val lines = lines(dedupe(chars), rulings.filter { !it.horizontal })
         val tables = tables(rulings, lines, content)
         val inTable = HashSet<Line>()
-        for (t in tables) inTable += t.lines
+        for (t in tables) for (n in t.nested()) inTable += n.lines
         val bandLines = lines.filter { it !in inTable && isRepeated(it, h, repeated, pageNumber) }
         val free = lines.filter { it !in inTable && it !in bandLines }
         // Pictures: those the text runs over float behind it; the rest are in the flow.
@@ -98,7 +98,8 @@ internal object PdfLayout {
             if (ocr && p.width * p.height > w * h * 0.5) continue
             val overText = free.any { l -> l.x0 < p.x + p.width && l.x1 > p.x && l.top < p.y + p.height && l.bottom > p.y } ||
                 tables.any { t -> t.x0 < p.x + p.width && t.x1 > p.x && t.y0 < p.y + p.height && t.y1 > p.y && !(p.x >= t.x0 && p.x + p.width <= t.x1 && p.y >= t.y0 && p.y + p.height <= t.y1) }
-            val inCell = tables.firstOrNull { t -> p.x >= t.x0 - 1 && p.x + p.width <= t.x1 + 1 && p.y >= t.y0 - 1 && p.y + p.height <= t.y1 + 1 }
+            val inCell = tables.flatMap { it.nested() }.filter { t -> p.x >= t.x0 - 1 && p.x + p.width <= t.x1 + 1 && p.y >= t.y0 - 1 && p.y + p.height <= t.y1 + 1 }
+                .minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }
             when {
                 inCell != null -> inCell.pictures += p
                 overText || p.width * p.height > w * h * 0.6 -> floating += p
@@ -715,6 +716,10 @@ internal object PdfLayout {
     class TableGrid(val xs: List<Double>, val ys: List<Double>, val hs: List<Ruling>, val vs: List<Ruling>, val fills: List<io.github.baeseungwon1010.officecanvas.pdf.PdfRect>) {
         val x0 = xs.first(); val x1 = xs.last(); val y0 = ys.first(); val y1 = ys.last()
         val lines = ArrayList<Line>()
+        /** Tables inside this one's cells. */
+        val children = ArrayList<TableGrid>()
+        /** This table and those nested in it. */
+        fun nested(): List<TableGrid> = listOf(this) + children.flatMap { it.nested() }
         fun encloses(o: TableGrid) = x0 <= o.x0 + 1 && x1 >= o.x1 - 1 && y0 <= o.y0 + 1 && y1 >= o.y1 - 1 && (x1 - x0) * (y1 - y0) > (o.x1 - o.x0) * (o.y1 - o.y0)
         val pictures = ArrayList<ConvImage>()
 
@@ -750,6 +755,8 @@ internal object PdfLayout {
                     placed += p.y to ConvParagraph(emptyList(), ConvAlign.CENTER, image = ConvImage(p.data, p.png, p.pixelWidth, p.pixelHeight,
                         min(p.width, cx1 - cx0 - 2), p.height * min(1.0, (cx1 - cx0 - 2) / p.width), 0.0, 0.0))
                 }
+                // Tables in the cell, each built in it.
+                for (t in children) if ((t.x0 + t.x1) / 2 in cx0..cx1 && (t.y0 + t.y1) / 2 in cy0..cy1) placed += t.y0 to t.build(cx0 + 1.5, cx1 - 1.5, rulings, 0.0)
                 val blocks = placed.sortedBy { it.first }.map { it.second }
                 // Vertical position of the text in the cell.
                 val textTop = inside.minOfOrNull { it.top }; val textBottom = inside.maxOfOrNull { it.bottom }
@@ -822,16 +829,20 @@ internal object PdfLayout {
             grid.lines += inside
             out += grid
         }
-        // A single frame around (most of) the page is a page border; a one-cell
-        // frame around a table is the table's box. A table inside another's cell
-        // otherwise stays in the outer one as text (nesting isn't rebuilt).
-        val frames = out.filter { t -> t.xs.size == 2 && t.ys.size == 2 }
+        // A frame around (most of) the page, if only divided across, is a page border;
+        // a one-cell frame around a table is the table's box. A table inside another's
+        // cell is built in that cell.
         val pageArea = content.width * content.height
-        val kept = out.filter { t -> !(t in frames && ((t.x1 - t.x0) * (t.y1 - t.y0) > pageArea * 0.45 || out.any { o -> o !== t && t.encloses(o) })) }
+        val kept = out.filter { t ->
+            !(t.xs.size == 2 && ((t.x1 - t.x0) * (t.y1 - t.y0) > pageArea * 0.45 || t.ys.size == 2 && out.any { o -> o !== t && t.encloses(o) }))
+        }
         for (t in kept) t.lines.clear()
         for (l in lines) kept.filter { t -> (l.x0 + l.x1) / 2 in t.x0..t.x1 && l.baseline - l.size * 0.3 in t.y0..t.y1 }
             .minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }?.lines?.add(l)
-        val ruled = kept.filter { t -> t.lines.isNotEmpty() && kept.none { o -> o !== t && o.encloses(t) } }
+        // Each table under the smallest one around it.
+        for (t in kept) kept.filter { o -> o !== t && o.encloses(t) }.minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }?.children?.add(t)
+        for (t in kept) t.children.retainAll { c -> c.nested().any { it.lines.isNotEmpty() } }
+        val ruled = kept.filter { t -> t.nested().any { it.lines.isNotEmpty() } && kept.none { o -> o !== t && o.encloses(t) } }
         return ruled + openTables(hs.filter { h -> ruled.none { t -> h.y0 >= t.y0 - 1 && h.y0 <= t.y1 + 1 && h.x0 >= t.x0 - 2 && h.x1 <= t.x1 + 2 } }, lines, content)
     }
 
