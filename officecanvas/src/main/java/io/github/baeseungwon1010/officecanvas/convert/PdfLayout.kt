@@ -548,6 +548,17 @@ internal object PdfLayout {
 
     // ---- paragraphs -----------------------------------------------------------
 
+    /** A line's text with a space where a gap was left for one. */
+    private fun spaced(l: Line): String {
+        val sb = StringBuilder()
+        var prev: PdfChar? = null
+        for (c in l.chars) {
+            if (prev != null && !c.isSpace && !prev.isSpace && c.x - (prev.x + prev.width) > c.size * 0.2) sb.append(' ')
+            sb.append(c.text); prev = c
+        }
+        return sb.toString()
+    }
+
     private val BULLET = Regex("^\\s*([•●○◦▪■□◆◇▶▷►‣⁃∙·\\-–—※✓✔➢➤]|\\(?\\d{1,3}[.)]|\\(?[a-zA-Z가-힣][.)]|[①-⑳]|[ⅰ-ⅹⅠ-Ⅹ][.)]?)\\s")
 
     /**
@@ -596,9 +607,11 @@ internal object PdfLayout {
                 val shortPrev = wrapRight - prev.last().x1 > firstWord + size * 0.6 && prev.last().x1 < blockRight - size * 0.5 ||
                     prev.last().x1 < blockRight - size * 4
                 val indented = first.x0 > blockLeft + size * 0.8 && pf.x0 <= blockLeft + size * 0.3
-                val bullet = BULLET.containsMatchIn(row.joinToString("") { it.text })
+                val bullet = BULLET.containsMatchIn(row.joinToString(" ") { spaced(it) })
+                // Code doesn't wrap: each line of a monospaced listing is its own.
+                val code = first.chars.first().font.monospace && pf.chars.first().font.monospace
                 val styleChange = abs(first.size - pf.size) > 0.6 || first.chars.first().font.bold != pf.chars.first().font.bold && first.chars.count { it.font.bold } * 2 > first.chars.size
-                bigGap || shortPrev || indented || bullet || styleChange
+                bigGap || shortPrev || indented || bullet || styleChange || code
             }
             if (start) groups += mutableListOf(row) else g!! += row
         }
