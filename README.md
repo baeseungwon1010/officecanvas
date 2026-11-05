@@ -1,6 +1,6 @@
 # OfficeCanvas
 
-Render PowerPoint (`.pptx`, `.ppt`), Word (`.docx`) and Hangul (`.hwpx`, `.hwp`) documents to Android `Bitmap`s, on the device, in plain Kotlin. No native code, no server, no dependencies beyond the Android SDK.
+Render PowerPoint (`.pptx`, `.ppt`), Word (`.docx`) and Hangul (`.hwpx`, `.hwp`) documents to Android `Bitmap`s, and convert PDFs into editable Word and Hangul documents, on the device, in plain Kotlin. No native code, no server, no dependencies beyond the Android SDK.
 
 ![Slides rendered by OfficeCanvas next to LibreOffice's rendering of the same .ppt](docs/images/ppt_vs_libreoffice.png)
 
@@ -28,6 +28,31 @@ val pageCount = OfficeCanvas.render(context, file) { index, bitmap ->
 - Anything that isn't a readable PPTX, PPT, DOCX, HWPX or HWP raises `OfficeCanvasException`. Password-protected and distribution-only (배포용) `.hwp` files are encrypted and not supported.
 - At most `OfficeCanvas.MAX_PAGES` (1000) pages are rendered.
 
+### Converting PDFs
+
+```kotlin
+PdfConverter.convert(pdf, File(outDir, "document.docx"), ConvertFormat.DOCX)   // or HWPX, HWP
+```
+
+A PDF records where each glyph is drawn, not paragraphs or tables, so the converter reads the drawing and rebuilds the document from it, page by page:
+
+- Text through each font's encoding (ToUnicode maps, the standard encodings and glyph names, CJK CMaps, the embedded font's own tables), with its font, size, weight, slant and color.
+- Lines into paragraphs, in reading order, with their alignment, indents, tab stops, line pitch and spacing, and shading behind them. Columns, and text beside a picture, stay side by side, each in a cell of a borderless table.
+- Tables from the PDF's rulings, with merged cells, borders and cell shading, including tables ruled only across.
+- Pictures (pictures under the text stay behind it), and the header and footer from lines repeated at the top and bottom of the pages, with a page number field.
+- Each PDF page starts a new page, and the page size and margins come from the PDF.
+- Encrypted PDFs that only restrict printing or copying open as viewers open them. A PDF that needs a password to open raises `OfficeCanvasException`.
+
+What it doesn't rebuild:
+
+- Scanned pages with no text layer come out as their pictures.
+- Vector drawings and charts are dropped, except their table rulings and fills.
+- Equations come out as plain text.
+- Text boxes join the flow, and text flowing from one column into the next is cut at each column's end.
+- The fonts are named but not embedded (metric clones and TeX fonts are named as the common fonts they stand for).
+
+Conversion runs on the calling thread, needs no Android APIs, and holds one page at a time. The `.hwpx` and `.hwp` files have been checked with LibreOffice's H2Orestart filter, with pyhwp, and with this library's own readers, but not yet with Hancom's Hangul.
+
 ### Files from other people
 
 Documents are parsed as if they could be hostile, since they usually come from someone else:
@@ -36,7 +61,7 @@ Documents are parsed as if they could be hostile, since they usually come from s
 - Sizes and counts read from a file are checked against the data actually present before anything is allocated, every chain or loop in a file is followed at most once, nesting stops at 32 levels, decoded pictures are subsampled to at most 16 million pixels, and output stops at 1000 pages.
 - A damaged shape, picture or slide is skipped; anything worse, including running out of memory, comes out as `OfficeCanvasException` rather than an `Error`.
 
-`MaliciousInputTest` holds the crafted files these rules were written against.
+`MaliciousInputTest` and `PdfMaliciousInputTest` hold the crafted files these rules were written against.
 
 The `sample` module is a one-screen app: pick a document and its pages appear in a list.
 
@@ -144,7 +169,9 @@ Office documents are mostly set in Calibri, Arial, Times New Roman and Courier N
 
 ## How close is it
 
-Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.8; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D perspective. For `.ppt`, on a 75-slide lecture deck, 64 slides have every text baseline within 6 pt of LibreOffice's; most of the others are text shrunk to fit, which follows PowerPoint's steps rather than LibreOffice's way. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. Word documents were compared the same way on 80 real `.docx` files (1,733 pages of forms, write-ups, notes and problem sets): the page count matches LibreOffice's in 45 of them and is within 10 % in 71. Another 65 `.docx` files, the Hangul documents above exported to Word by LibreOffice (text boxes, floating pictures and equations throughout), match in 31 and are within 10 % in 59. None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
+Both slide formats are checked page by page against LibreOffice's PDF output of the same file. For `.pptx`, on 34 real decks (447 slides of lectures, reports and team presentations), the mean per-slide difference score from `tools/compare_render.py` is 1.8; on the first 15 of them it was 6.1 before table styles, theme style references, inherited backgrounds and placeholders, SVG icons and Carlito were added. Most of what remains is Hangul set in different fallback fonts (LibreOffice also spaces Hangul and Latin apart) and 3-D perspective. For `.ppt`, on a 75-slide lecture deck, 64 slides have every text baseline within 6 pt of LibreOffice's; most of the others are text shrunk to fit, which follows PowerPoint's steps rather than LibreOffice's way. Hangul documents were compared the same way on 18 real `.hwp` and 11 `.hwpx` documents (about 170 pages of forms, reports, handbooks and lecture notes) against LibreOffice with the H2Orestart import filter. That reference lays text out again with its own metrics instead of using the saved line positions, so it differs from Hangul too; the comparison is used to find missing features rather than to score. Word documents were compared the same way on 80 real `.docx` files (1,733 pages of forms, write-ups, notes and problem sets): the page count matches LibreOffice's in 45 of them and is within 10 % in 71. Another 65 `.docx` files, the Hangul documents above exported to Word by LibreOffice (text boxes, floating pictures and equations throughout), match in 31 and are within 10 % in 59. PDF conversion is checked by laying the converted `.docx` out again with LibreOffice and comparing it page by page with the PDF itself. On 80 PDFs that LibreOffice exported from real Word documents (1,733 pages), the page count matches in 76 and the mean difference score is 4.4. On 241 real PDFs of every kind (lecture slides, papers, forms, worksheets, brochures, posters, scans; 4,026 pages), it matches in 123 and is within 10 % in 150, with a mean score of 13.6; most of what's left is designed pages (brochures, slides) whose text boxes and drawings a flowing document can't hold in place, and scans. The text read matches PyMuPDF's in 99.5 % of characters. All 241 convert, in 140 seconds together on a desktop JVM.
+
+None of these documents are included here, for copyright and privacy reasons. `tools/compare.sh` runs the same comparison on any document; see [docs/TESTING.md](docs/TESTING.md).
 
 LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice disagree (symbol fonts, automatic numbering), the renderer follows PowerPoint.
 
@@ -156,7 +183,7 @@ LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice d
 
 ## 한국어 소개
 
-OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·글상자·수식·각주·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.4`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
+OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·글상자·수식·각주·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. `PdfConverter`는 PDF를 고쳐 쓸 수 있는 DOCX·HWPX·HWP 문서로 바꿉니다. 글자를 글꼴의 인코딩으로 읽고, 줄·문단·표(병합된 칸과 테두리 포함)·그림·머리말과 꼬리말을 다시 짭니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.4`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
 
 ## License
 

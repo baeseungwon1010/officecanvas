@@ -15,9 +15,15 @@ OfficeCanvas.render(context, file)
         ├── HWP ─── hwp.HwpParser ────┤
         ├── HWPML ─ hwp.HwpmlParser ──┤   (HWPML and DOCX laid out with hwpx.TextFlow)
         └── DOCX ── docx.DocxParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
+
+PdfConverter.convert(pdf, output, format)
+        pdf.PdfDocument ──► pdf.PdfPageReader ──► convert.PdfLayout ──► convert.ConvPage ──┬──► DocxWriter ──► .docx
+          (objects,           (characters,          (lines, tables,       (paragraphs,      ├──► HwpxWriter ──► .hwpx
+           encryption,         rulings,             reading order,         tables,          └──► HwpWriter ───► .hwp
+           pages)              pictures)            paragraphs)            pictures)
 ```
 
-Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` is `internal`.
+Everything except `OfficeCanvas`, `PdfConverter`, `ConvertFormat`, `DocumentFormat` and `OfficeCanvasException` is `internal`. The converter uses no Android APIs.
 
 ## Packages
 
@@ -56,6 +62,10 @@ Everything except `OfficeCanvas`, `DocumentFormat` and `OfficeCanvasException` i
 **`hwpx/TextFlow`**: line and page layout for formats that save none (HWPML, DOCX): text broken into atoms (words, or single Hangul characters where those may break), measured with `HwpxRenderer.widthHu`, filled into lines (tab stops, a word wider than a line broken between characters), stacked at the paragraph's line spacing (Hangul's percent, or Word's multiple of a font's single line), and paged through `PageFlow` with `laidOut` set, so pages break only where `TextFlow` breaks them.
 
 **`docx`**: `DocxParser` reads WordprocessingML: styles (document defaults, table style, paragraph and character style chains), numbering, tab stops, paragraph borders and shading, tables, pictures (read from the package when drawn; the zip stays open in `HwpxDoc.resources`), shapes, text boxes and groups (DrawingML through `mc:AlternateContent`, or VML), page breaks, sections, headers and footers, footnotes and endnotes, and lays it all out with `TextFlow` into the Hangul model. Floating objects are placed after their paragraph, on the page it landed on (`PageFlow.put`), unless text wraps them, when they go among the paragraph's lines. `Omml` turns Office Math into the `EqNode` tree that `EquationLayout` typesets for Hangul's equations.
+
+**`pdf`**: reading PDFs. `PdfDocument` maps the file and reads its cross-reference (tables or streams, rebuilt by scanning when damaged), object streams, decryption (`PdfCrypt`: the standard handler with the empty user password) and the page tree. `PdfLexer` and `PdfObjects` are the object syntax, `PdfFilters` the stream filters, `PdfFont` (with `PdfCMap`, `PdfEncodings`, `StandardWidths` and `TrueTypeTables`) maps a font's codes to text and widths, `PdfPageReader` runs a page's content and annotation appearances into characters, rulings, filled rectangles and pictures, and `PdfImages` turns pictures into PNG or JPEG files.
+
+**`convert`**: rebuilding and writing documents. `PdfLayout` turns a page's content into a `ConvPage` (`ConvModel`: paragraphs of styled runs, tables, pictures, header and footer); `DocxWriter`, `HwpxWriter` and `HwpWriter` write those pages as they come (`PageSink`), with `PlainZip` and `CfbWriter` for the containers. `PdfConverter` makes two light passes first (headers and footers, margins) and then one per page.
 
 **`ole`**: `Ole2Reader`, the OLE2 / Compound File container shared by `.ppt` and `.hwp` (FAT, mini-FAT, storage tree). It reads streams from the file when asked for rather than loading the file whole; close it when done.
 
