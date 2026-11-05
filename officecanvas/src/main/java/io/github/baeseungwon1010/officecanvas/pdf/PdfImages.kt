@@ -107,7 +107,25 @@ internal object PdfImages {
                 if (alpha != null) out[o + 3] = alpha[y * w + x]
             }
         }
+        if (alpha != null && isShadow(out, alpha)) return null
         return Image(png(out, w, h, alpha != null), true, w, h)
+    }
+
+    /**
+     * One color, never close to opaque: a soft shadow or glow that a slide or
+     * drawing program exported as a picture under a shape drawn on top. Without
+     * that shape (vector drawings aren't converted) it would show as a gray blot.
+     */
+    private fun isShadow(rgba: ByteArray, alpha: ByteArray): Boolean {
+        var maxA = 0
+        for (a in alpha) maxA = maxOf(maxA, a.toInt() and 0xFF)
+        if (maxA >= 200 || maxA == 0) return maxA == 0
+        var i = 0
+        while (i < rgba.size) {
+            if (rgba[i] != rgba[0] || rgba[i + 1] != rgba[1] || rgba[i + 2] != rgba[2]) return false
+            i += 4
+        }
+        return true
     }
 
     private fun sample(data: ByteArray, rowStart: Int, bitPos: Long, bpc: Int): Int {
