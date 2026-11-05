@@ -84,5 +84,7 @@ internal class ConvImage(
     val data: ByteArray, val png: Boolean, val pixelWidth: Int, val pixelHeight: Int,
     val width: Double, val height: Double,
     /** From the page's top left (floating) or the column's left edge (in the flow). */
-    val x: Double, val y: Double
+    val x: Double, val y: Double,
+    /** Floats where it was, taking no room in the flow: text set as a picture, a logo on every page. */
+    val floats: Boolean = false
 )

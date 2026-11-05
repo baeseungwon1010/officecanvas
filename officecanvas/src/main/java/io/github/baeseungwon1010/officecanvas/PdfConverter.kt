@@ -126,7 +126,7 @@ object PdfConverter {
                 for ((i, p) in pages.withIndex()) {
                     val c = reader.read(p)
                     val pictures = c.pictures.mapNotNull { pic ->
-                        pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y) }
+                        pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text) }
                     }
                     sink.page(PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1))
                 }

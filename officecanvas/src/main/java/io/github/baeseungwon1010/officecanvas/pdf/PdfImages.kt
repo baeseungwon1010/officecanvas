@@ -12,7 +12,8 @@ import java.util.zip.Deflater
 internal object PdfImages {
 
     /** [data] is a PNG or JPEG file of [width] x [height] pixels. */
-    class Image(val data: ByteArray, val png: Boolean, val width: Int, val height: Int)
+    /** A picture's file; [text] when it is text set as a picture (one color, the glyphs in a finer mask). */
+    class Image(val data: ByteArray, val png: Boolean, val width: Int, val height: Int, val text: Boolean = false)
 
     const val MAX_PIXELS = 16_000_000L
     const val MAX_JPEG_PIXELS = 200_000_000L
@@ -86,8 +87,14 @@ internal object PdfImages {
         val rowBits = w.toLong() * comps * bpc
         val rowBytes = ((rowBits + 7) / 8).toInt()
         val maxV = (1 shl bpc) - 1
-        val alpha = smask?.let { softMask(doc, it, w, h) }
-        val out = ByteArray(w * h * if (alpha != null) 4 else 3)
+        // A soft mask finer than the picture sets the size: text exported as pictures
+        // is a picture of one or two pixels of its color, with the glyphs in the mask.
+        val mw = smask?.let { doc.num(it.dict["Width"])?.toInt() } ?: 0
+        val mh = smask?.let { doc.num(it.dict["Height"])?.toInt() } ?: 0
+        val finer = mw > w && mh > h && mw.toLong() * mh <= MAX_PIXELS
+        val ow = if (finer) mw else w; val oh = if (finer) mh else h
+        val alpha = smask?.let { softMask(doc, it, ow, oh) }
+        val colors = IntArray(w * h)
         val samples = IntArray(comps)
         for (y in 0 until h) {
             val rowStart = y * rowBytes
@@ -101,14 +108,18 @@ internal object PdfImages {
                     }
                     samples[k] = v
                 }
-                val rgb = model.rgb(samples, maxV)
-                val o = (y * w + x) * if (alpha != null) 4 else 3
-                out[o] = (rgb shr 16).toByte(); out[o + 1] = (rgb shr 8).toByte(); out[o + 2] = rgb.toByte()
-                if (alpha != null) out[o + 3] = alpha[y * w + x]
+                colors[y * w + x] = model.rgb(samples, maxV)
             }
         }
+        val out = ByteArray(ow * oh * if (alpha != null) 4 else 3)
+        for (y in 0 until oh) for (x in 0 until ow) {
+            val rgb = colors[(y * h / oh) * w + x * w / ow]
+            val o = (y * ow + x) * if (alpha != null) 4 else 3
+            out[o] = (rgb shr 16).toByte(); out[o + 1] = (rgb shr 8).toByte(); out[o + 2] = rgb.toByte()
+            if (alpha != null) out[o + 3] = alpha[y * ow + x]
+        }
         if (alpha != null && isShadow(out, alpha)) return null
-        return Image(png(out, w, h, alpha != null), true, w, h)
+        return Image(png(out, ow, oh, alpha != null), true, ow, oh, text = finer && colors.all { it == colors[0] })
     }
 
     /**

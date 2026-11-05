@@ -101,6 +101,7 @@ internal object PdfLayout {
             val inCell = tables.flatMap { it.nested() }.filter { t -> p.x >= t.x0 - 1 && p.x + p.width <= t.x1 + 1 && p.y >= t.y0 - 1 && p.y + p.height <= t.y1 + 1 }
                 .minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }
             when {
+                p.floats -> floating += p
                 inCell != null -> inCell.pictures += p
                 overText || p.width * p.height > w * h * 0.6 -> floating += p
                 else -> flowPictures += p
