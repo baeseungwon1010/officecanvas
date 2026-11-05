@@ -450,7 +450,15 @@ internal object PdfLayout {
                 val size = first.size
                 val bigGap = typicalPitch != null && pitch > typicalPitch * 1.35 && pitch > size * 1.6
                 // The line before ended though this line's first word would have fitted after it.
-                val firstWord = first.chars.takeWhile { !it.isSpace && it.text.isNotBlank() }.let { cs -> if (cs.isEmpty()) size else cs.last().x + cs.last().width - cs.first().x }
+                // (A word ends at a space drawn or at a gap left for one.)
+                val word = ArrayList<PdfChar>()
+                for (c in first.chars) {
+                    if (c.isSpace || c.text.isBlank()) break
+                    val p = word.lastOrNull()
+                    if (p != null && c.x - (p.x + p.width) > c.size * 0.2) break
+                    word += c
+                }
+                val firstWord = if (word.isEmpty()) size else word.last().x + word.last().width - word.first().x
                 val shortPrev = wrapRight - prev.last().x1 > firstWord + size * 0.6 && prev.last().x1 < blockRight - size * 0.5 ||
                     prev.last().x1 < blockRight - size * 4
                 val indented = first.x0 > blockLeft + size * 0.8 && pf.x0 <= blockLeft + size * 0.3
