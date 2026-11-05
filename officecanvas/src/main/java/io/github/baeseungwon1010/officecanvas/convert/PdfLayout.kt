@@ -60,8 +60,16 @@ internal object PdfLayout {
 
     private fun key(l: Line) = l.text.replace(Regex("\\s+"), "").replace(Regex("\\d+"), "#")
 
-    private fun isRepeated(l: Line, h: Double, repeated: Set<String>) =
-        (l.bottom < h * BAND && "T:" + key(l) in repeated) || (l.top > h * (1 - BAND) && "B:" + key(l) in repeated)
+    /**
+     * A header or footer line: one repeated at the pages' tops or bottoms, or there a
+     * page number standing alone ("1/1", "- 3 -", "Page 2 of 5"), which a one-page
+     * document can't repeat.
+     */
+    private fun isRepeated(l: Line, h: Double, repeated: Set<String>, pageNumber: Int) =
+        (l.bottom < h * BAND && "T:" + key(l) in repeated) || (l.top > h * (1 - BAND) && "B:" + key(l) in repeated) ||
+            ((l.bottom < h * BAND || l.top > h * (1 - BAND)) && PAGE_NUMBER.matchEntire(spaced(l).trim())?.groupValues?.get(1)?.toIntOrNull() == pageNumber)
+
+    private val PAGE_NUMBER = Regex("[-–—(\\[\\s]*(?:page|p\\.|pg\\.?)?\\s*(\\d{1,4})\\s*(?:(?:/|of)\\s*\\d{1,4})?\\s*(?:쪽|페이지)?[-–—)\\]\\s]*", RegexOption.IGNORE_CASE)
 
     /**
      * A page's structure; [margins] (left, top, right, bottom) set the column the
@@ -81,7 +89,7 @@ internal object PdfLayout {
         val tables = tables(rulings, lines, content)
         val inTable = HashSet<Line>()
         for (t in tables) inTable += t.lines
-        val bandLines = if (repeated.isEmpty()) emptyList() else lines.filter { it !in inTable && isRepeated(it, h, repeated) }
+        val bandLines = lines.filter { it !in inTable && isRepeated(it, h, repeated, pageNumber) }
         val free = lines.filter { it !in inTable && it !in bandLines }
         // Pictures: those the text runs over float behind it; the rest are in the flow.
         val floating = ArrayList<ConvImage>()
@@ -191,11 +199,11 @@ internal object PdfLayout {
     }
 
     /** Where a page's content lies (left, top, right, bottom margins), from its text (but the [repeated] header and footer), rulings and pictures. */
-    fun margins(content: PdfPageContent, repeated: Set<String> = emptySet()): DoubleArray? {
+    fun margins(content: PdfPageContent, repeated: Set<String> = emptySet(), pageNumber: Int = 1): DoubleArray? {
         val w = content.width; val h = content.height
         val xs = ArrayList<Double>(); val ys = ArrayList<Double>(); val xe = ArrayList<Double>(); val ye = ArrayList<Double>()
         for (l in lines(dedupe(content.chars.filter { !it.invisible && it.text.isNotEmpty() }), emptyList())) {
-            if (l.x0 < 0 || l.x1 > w || l.top < 0 || l.bottom > h || isRepeated(l, h, repeated)) continue
+            if (l.x0 < 0 || l.x1 > w || l.top < 0 || l.bottom > h || isRepeated(l, h, repeated, pageNumber)) continue
             xs += l.x0; xe += l.x1; ys += l.top; ye += l.bottom
         }
         for (p in content.pictures) if (p.w * p.h < w * h * 0.6) { xs += p.x; xe += p.x + p.w; ys += p.y; ye += p.y + p.h }

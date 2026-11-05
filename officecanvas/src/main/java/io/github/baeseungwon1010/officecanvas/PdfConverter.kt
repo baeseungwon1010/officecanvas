@@ -96,9 +96,9 @@ object PdfConverter {
                 val margins = ArrayList<DoubleArray?>()
                 val fonts = HashMap<String, Int>()
                 var hangul = 0; var latin = 0
-                for (p in pages) {
+                for ((i, p) in pages.withIndex()) {
                     val c = reader.read(p)
-                    margins += PdfLayout.margins(c, repeated)
+                    margins += PdfLayout.margins(c, repeated, i + 1)
                     for (ch in c.chars) if (ch.text.isNotBlank()) {
                         fonts.merge(ch.font.family, 1, Int::plus)
                         if (ch.text[0] in '\uAC00'..'\uD7A3') hangul++ else latin++
