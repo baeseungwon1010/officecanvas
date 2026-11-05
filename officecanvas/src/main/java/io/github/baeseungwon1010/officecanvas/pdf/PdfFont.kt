@@ -247,7 +247,9 @@ internal class PdfFont private constructor(
             val missing = doc.num(descriptor?.get("MissingWidth")) ?: 0.0
             val mono = isMono(baseName, descriptor)
             val type3Scale = if (subtype == "Type3") doc.array(d["FontMatrix"])?.items?.getOrNull(0)?.let { doc.num(it) } ?: 0.001 else 0.001
-            val family = familyOf(baseName)
+            // A Type 3 font's name is only a name for its glyph procedures ("T3", "F15"):
+            // the document's own font stands in.
+            val family = if (subtype == "Type3") "" else familyOf(baseName)
             val bold = isBold(baseName, descriptor); val italic = isItalic(baseName, descriptor)
             val glyphText = table
             return PdfFont(

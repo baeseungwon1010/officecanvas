@@ -147,7 +147,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     }
 
     private fun rPr(r: ConvRun): String {
-        val f = esc(r.font)
+        val f = esc(r.font.ifBlank { defaultFont })
         val sb = StringBuilder("<w:rFonts w:ascii=\"$f\" w:hAnsi=\"$f\" w:eastAsia=\"$f\" w:cs=\"$f\"/>")
         if (r.bold) sb.append("<w:b/><w:bCs/>")
         if (r.italic) sb.append("<w:i/><w:iCs/>")

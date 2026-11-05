@@ -95,10 +95,14 @@ object PdfConverter {
                 // page size), and the commonest font.
                 val margins = ArrayList<DoubleArray?>()
                 val fonts = HashMap<String, Int>()
+                var hangul = 0; var latin = 0
                 for (p in pages) {
                     val c = reader.read(p)
                     margins += PdfLayout.margins(c, repeated)
-                    for (ch in c.chars) if (ch.text.isNotBlank()) fonts.merge(ch.font.family, 1, Int::plus)
+                    for (ch in c.chars) if (ch.text.isNotBlank()) {
+                        fonts.merge(ch.font.family, 1, Int::plus)
+                        if (ch.text[0] in '\uAC00'..'\uD7A3') hangul++ else latin++
+                    }
                 }
                 val sizes = pages.map { Math.round(it.cropBox[2] - it.cropBox[0]) to Math.round(it.cropBox[3] - it.cropBox[1]) }
                 val shared = HashMap<Pair<Long, Long>, DoubleArray>()
@@ -112,7 +116,8 @@ object PdfConverter {
                 // may run a little longer than the PDF's, and a page is never meant to
                 // overflow into the next (each PDF page starts a page).
                 for (m in shared.values) m[3] = m[3] * 0.4
-                val font = fonts.maxByOrNull { it.value }?.key ?: "Arial"
+                // (Type 3 fonts have no name to give: a Korean or Latin default then.)
+                val font = fonts.filterKeys { it.isNotBlank() }.maxByOrNull { it.value }?.key ?: if (hangul > latin) "맑은 고딕" else "Arial"
                 val sink: PageSink = when (format) {
                     ConvertFormat.DOCX -> DocxWriter(output, font)
                     ConvertFormat.HWPX -> HwpxWriter(output, font)
