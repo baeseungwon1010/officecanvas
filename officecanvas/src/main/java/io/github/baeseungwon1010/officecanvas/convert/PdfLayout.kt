@@ -509,7 +509,9 @@ internal object PdfLayout {
             val spaceBefore = prevBottom?.let { (boxTop - it).coerceAtLeast(0.0) } ?: 0.0
             // A fill behind the paragraph's text (a bar, a band) shades it.
             val textX0 = g.minOf { it.first().x0 }; val textX1 = g.maxOf { it.last().x1 }
-            val shade = fills.filter { f -> f.x <= textX0 + 1 && f.x + f.w >= textX1 - 1 && f.y <= first.baseline && f.y + f.h >= first.baseline - first.size * 0.5 && f.h < box * g.size + first.size * 3 }
+            // (One box may hold several paragraphs: a code block, a note.)
+            val lastBase = g.last().first().baseline
+            val shade = fills.filter { f -> f.x <= textX0 + 1 && f.x + f.w >= textX1 - 1 && f.y <= first.baseline - first.size * 0.5 && f.y + f.h >= lastBase }
                 .minByOrNull { it.w * it.h }
             val para = ConvParagraph(
                 runs.filter { it.text.isNotEmpty() }.let { trimEnd(it) },
