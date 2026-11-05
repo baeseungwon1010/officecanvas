@@ -248,12 +248,17 @@ internal class PdfFont private constructor(
             val mono = isMono(baseName, descriptor)
             val type3Scale = if (subtype == "Type3") doc.array(d["FontMatrix"])?.items?.getOrNull(0)?.let { doc.num(it) } ?: 0.001 else 0.001
             val family = familyOf(baseName)
+            val bold = isBold(baseName, descriptor); val italic = isItalic(baseName, descriptor)
+            val glyphText = table
             return PdfFont(
-                baseName, family, isBold(baseName, descriptor), isItalic(baseName, descriptor), mono, isSerif(baseName, descriptor),
+                baseName, family, bold, italic, mono, isSerif(baseName, descriptor),
                 cid = false, codeMap = null, toUnicode = toUnicode, simpleText = table, charset = null, cidText = null,
                 widths = { code, _ ->
                     val k = code.toInt() - first
-                    widths?.getOrNull(k)?.takeIf { it > 0 } ?: missing.takeIf { it > 0 } ?: if (mono) 600.0 else if (code == 32L) 250.0 else 500.0
+                    widths?.getOrNull(k)?.takeIf { it > 0 } ?: missing.takeIf { it > 0 } ?: if (mono) 600.0 else
+                        // A standard font named without its widths: the standard ones.
+                        (if (widths == null) StandardWidths.width(family, bold, italic, glyphText.getOrNull(code.toInt())) else null)
+                            ?: if (code == 32L) 250.0 else 500.0
                 },
                 scale = if (subtype == "Type3") type3Scale else 0.001,
                 vertical = false
