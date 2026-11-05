@@ -106,8 +106,11 @@ internal object PdfLayout {
                 tables.any { t -> t.x0 < p.x + p.width && t.x1 > p.x && t.y0 < p.y + p.height && t.y1 > p.y && !(p.x >= t.x0 && p.x + p.width <= t.x1 && p.y >= t.y0 && p.y + p.height <= t.y1) }
             val inCell = tables.flatMap { it.nested() }.filter { t -> p.x >= t.x0 - 1 && p.x + p.width <= t.x1 + 1 && p.y >= t.y0 - 1 && p.y + p.height <= t.y1 + 1 }
                 .minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }
+            // Pictures laid over each other (a photo over another) can't both be in the flow.
+            val overPicture = pictures.any { o -> o !== p && o.width * o.height <= w * h * 0.6 &&
+                min(o.x + o.width, p.x + p.width) - max(o.x, p.x) > 2 && min(o.y + o.height, p.y + p.height) - max(o.y, p.y) > 2 }
             when {
-                p.floats -> floating += p
+                p.floats || overPicture -> floating += p
                 inCell != null -> inCell.pictures += p
                 overText || p.width * p.height > w * h * 0.6 -> floating += p
                 else -> flowPictures += p
