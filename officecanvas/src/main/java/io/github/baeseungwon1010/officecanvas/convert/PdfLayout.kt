@@ -646,6 +646,15 @@ internal object PdfLayout {
             val inside = lines.filter { l -> (l.x0 + l.x1) / 2 in xs.first()..xs.last() && l.baseline - l.size * 0.3 in ys.first()..ys.last() }
             // A frame with nothing in it is a drawing, not a table.
             if (inside.isEmpty()) continue
+            // Nor is a grid of mostly empty cells: a chart's gridlines, with a legend in one.
+            val cells = (xs.size - 1) * (ys.size - 1)
+            if (cells >= 12) {
+                val used = inside.map { l ->
+                    val cx = (l.x0 + l.x1) / 2; val cy = l.baseline - l.size * 0.3
+                    xs.indexOfLast { it <= cx } to ys.indexOfLast { it <= cy }
+                }.toSet().size
+                if (used * 10 < cells) continue
+            }
             val grid = TableGrid(xs, ys, gh, gv, content.rects)
             grid.lines += inside
             out += grid
