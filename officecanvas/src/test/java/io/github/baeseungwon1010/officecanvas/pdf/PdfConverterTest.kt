@@ -119,6 +119,40 @@ class PdfConverterTest {
         }
     }
 
+    private fun all(els: List<HwpxElement>): List<HwpxElement> = els.flatMap {
+        listOf(it) + when (it) {
+            is HwpxElement.Table -> it.cells.flatten().filterNotNull().flatMap { c -> all(c.elements) }
+            is HwpxElement.Drawing -> all(it.content)
+            else -> emptyList()
+        }
+    }
+
+    @Test
+    fun `columns stay side by side, pictures in a row stay in a row`() {
+        val out = File.createTempFile("conv", ".docx").apply { deleteOnExit() }
+        assertEquals(1, PdfConverter.convert(file("layout.pdf"), out, ConvertFormat.DOCX))
+        val doc = DocxParser.parse(out)
+        try {
+            // Everything still fits on its one page.
+            assertEquals(1, doc.pages.size)
+            val els = all(doc.pages[0].elements)
+            val lines = els.filterIsInstance<HwpxElement.TextRun>().map { it.text }
+            // The columns share baselines across a 1.2 em gutter: no line runs from one into the other.
+            assertTrue(lines.joinToString("\n"), lines.none { "west" in it && "east" in it })
+            assertTrue(lines.any { "west" in it } && lines.any { "east" in it })
+            val tables = els.filterIsInstance<HwpxElement.Table>()
+            assertTrue(tables.any { t -> t.columnWidthsHu.size == 2 && texts(listOf(t)).joinToString(" ").let { "west" in it && "east" in it } })
+            // The three touching pictures share a row; the shadow is gone; the chart's empty grid isn't a table.
+            assertEquals(3, els.count { it is HwpxElement.ImageEl })
+            assertTrue(tables.any { t -> t.cells.size == 1 && t.cells[0].count { c -> c != null && c.elements.any { it is HwpxElement.ImageEl } } == 3 })
+            assertTrue(tables.none { it.columnWidthsHu.size * it.rowHeightsHu.size >= 12 })
+            // The right tab stop keeps its line.
+            assertTrue(lines.joinToString("\n"), lines.any { "Left" in it && "Right" in it })
+        } finally {
+            doc.resources?.close()
+        }
+    }
+
     @Test
     fun `an encrypted PDF converts like the plain one`() {
         val plain = DocxParser.parse(convert("sample.pdf", ConvertFormat.DOCX))

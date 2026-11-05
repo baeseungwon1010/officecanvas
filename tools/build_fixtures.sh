@@ -28,6 +28,7 @@ python3 make_features_docx.py "$RES/docx_samples"
 mkdir -p "$RES/pdf_samples"
 "$SOFFICE" --headless --norestore --convert-to pdf --outdir "$RES/pdf_samples" "$RES/docx_samples/sample.docx" "$RES/docx_samples/features.docx" >/dev/null
 python3 make_pdf_fixtures.py "$RES/pdf_samples"
+python3 make_pdf_layout.py "$RES/pdf_samples"
 python3 make_small_fixtures.py "$RES" "$tmp"
 
 cp "$tmp/sample_deck.pptx" "$tmp/feature_test.pptx" "$RES/pptx_samples/"
