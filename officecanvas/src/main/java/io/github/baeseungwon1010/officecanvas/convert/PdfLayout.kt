@@ -47,7 +47,13 @@ internal object PdfLayout {
     fun bandKeys(content: PdfPageContent): Map<String, Band> {
         val h = content.height
         val out = HashMap<String, Band>()
-        for (l in lines(dedupe(content.chars.filter { !it.invisible && it.text.isNotEmpty() }), emptyList())) {
+        val chars = dedupe(content.chars.filter { !it.invisible && it.text.isNotEmpty() })
+        // Headers are set small; a slide's title, repeated from slide to slide, isn't one
+        // (on a slide of pictures, the title may be most of its text).
+        val sizes = chars.filter { it.text.isNotBlank() }.map { it.size }.sorted()
+        val usual = sizes.getOrNull(sizes.size / 2) ?: 0.0
+        for (l in lines(chars, emptyList())) {
+            if (l.size > usual * 1.25 || l.size > 16) continue
             val k = when {
                 l.bottom < h * BAND -> "T:" + key(l)
                 l.top > h * (1 - BAND) -> "B:" + key(l)
