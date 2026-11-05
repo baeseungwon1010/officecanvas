@@ -199,11 +199,13 @@ internal object PdfLayout {
             xs += l.x0; xe += l.x1; ys += l.top; ye += l.bottom
         }
         for (p in content.pictures) if (p.w * p.h < w * h * 0.6) { xs += p.x; xe += p.x + p.w; ys += p.y; ye += p.y + p.h }
-        // Rulings and shading: a table's frame reaches past its text.
-        for (l in content.lines) if (minOf(l.x0, l.x1) >= 0 && maxOf(l.x0, l.x1) <= w && minOf(l.y0, l.y1) >= 0 && maxOf(l.y0, l.y1) <= h) {
+        // Rulings and shading: a table's frame reaches past its text. Not a bar along the
+        // page's edge (a banner, a bleed), which no table reaches.
+        fun inside(x0: Double, y0: Double, x1: Double, y1: Double) = x0 > w * 0.01 && y0 > h * 0.01 && x1 < w * 0.99 && y1 < h * 0.99
+        for (l in content.lines) if (inside(minOf(l.x0, l.x1), minOf(l.y0, l.y1), maxOf(l.x0, l.x1), maxOf(l.y0, l.y1))) {
             xs += minOf(l.x0, l.x1); xe += maxOf(l.x0, l.x1); ys += minOf(l.y0, l.y1); ye += maxOf(l.y0, l.y1)
         }
-        for (r in content.rects) if (r.w * r.h < w * h * 0.6 && r.x >= 0 && r.y >= 0 && r.x + r.w <= w && r.y + r.h <= h) {
+        for (r in content.rects) if (r.w * r.h < w * h * 0.6 && inside(r.x, r.y, r.x + r.w, r.y + r.h)) {
             xs += r.x; xe += r.x + r.w; ys += r.y; ye += r.y + r.h
         }
         if (xs.isEmpty()) return null
