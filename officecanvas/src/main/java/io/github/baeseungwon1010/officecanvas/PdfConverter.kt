@@ -73,16 +73,23 @@ object PdfConverter {
                 // First: what repeats at the pages' tops and bottoms (headers and
                 // footers, on at least two pages and most of them).
                 // A line with a number repeats only when the number goes with the page's
-                // (section numbers at the tops of pages don't).
+                // (section numbers at the tops of pages don't), and a header stays where it
+                // is (a line of the text that happens to begin each page doesn't).
                 val seen = HashMap<String, MutableList<Pair<Int, List<Int>>>>()
-                for ((i, p) in pages.withIndex()) for ((k, nums) in PdfLayout.bandKeys(reader.read(p))) seen.getOrPut(k) { ArrayList() } += i to nums
+                val heights = HashMap<String, MutableList<Double>>()
+                for ((i, p) in pages.withIndex()) for ((k, band) in PdfLayout.bandKeys(reader.read(p))) {
+                    seen.getOrPut(k) { ArrayList() } += i to band.numbers
+                    heights.getOrPut(k) { ArrayList() } += band.baseline
+                }
                 fun mostly(values: List<Int>, of: Int) = values.isNotEmpty() && values.groupingBy { it }.eachCount().maxOf { it.value } >= of * 0.8
-                val repeated = seen.filter { (_, occ) ->
-                    occ.size >= 2 && occ.size >= pages.size * 0.4 && (0 until occ.maxOf { it.second.size }).all { k ->
-                        // Each number in the line stays the same (a year) or goes with the page number.
-                        val vals = occ.mapNotNull { (_, nums) -> nums.getOrNull(k) }
-                        mostly(vals, occ.size) || mostly(occ.mapNotNull { (i, nums) -> nums.getOrNull(k)?.minus(i) }, occ.size)
-                    }
+                val repeated = seen.filter { (k, occ) ->
+                    val ys = heights.getValue(k).sorted(); val median = ys[ys.size / 2]
+                    occ.size >= 2 && occ.size >= pages.size * 0.4 && ys.count { Math.abs(it - median) <= 3 } >= ys.size * 0.8 &&
+                        (0 until occ.maxOf { it.second.size }).all { n ->
+                            // Each number in the line stays the same (a year) or goes with the page number.
+                            val vals = occ.mapNotNull { (_, nums) -> nums.getOrNull(n) }
+                            mostly(vals, occ.size) || mostly(occ.mapNotNull { (i, nums) -> nums.getOrNull(n)?.minus(i) }, occ.size)
+                        }
                 }.keys
                 // Then where the content lies on each page (for one set of margins per
                 // page size), and the commonest font.

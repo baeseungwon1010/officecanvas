@@ -41,16 +41,19 @@ internal object PdfLayout {
     private const val BAND = 0.11
 
     /** The lines in a page's top and bottom bands: their keys ("T:"/"B:" and the text, digits as #) and the numbers in them, to find what repeats. */
-    fun bandKeys(content: PdfPageContent): Map<String, List<Int>> {
+    /** A line in a page's top or bottom band: where its baseline is and the numbers in it. */
+    class Band(val baseline: Double, val numbers: List<Int>)
+
+    fun bandKeys(content: PdfPageContent): Map<String, Band> {
         val h = content.height
-        val out = HashMap<String, List<Int>>()
+        val out = HashMap<String, Band>()
         for (l in lines(dedupe(content.chars.filter { !it.invisible && it.text.isNotEmpty() }), emptyList())) {
             val k = when {
                 l.bottom < h * BAND -> "T:" + key(l)
                 l.top > h * (1 - BAND) -> "B:" + key(l)
                 else -> continue
             }
-            out[k] = Regex("\\d+").findAll(l.text).mapNotNull { it.value.take(6).toIntOrNull() }.toList()
+            out[k] = Band(l.baseline, Regex("\\d+").findAll(l.text).mapNotNull { it.value.take(6).toIntOrNull() }.toList())
         }
         return out
     }
