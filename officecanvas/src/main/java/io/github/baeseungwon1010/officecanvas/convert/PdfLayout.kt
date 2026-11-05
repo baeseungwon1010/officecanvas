@@ -309,6 +309,8 @@ internal object PdfLayout {
             }
             if (cur.isNotEmpty()) out += Line(cur, baselines[g])
         }
+        val joined = ArrayList(withScripts(out))
+        out.clear(); out += joined
         // Rotated text: each run in drawing order as a line at its top.
         var run = ArrayList<PdfChar>()
         for (c in rotated) {
@@ -318,6 +320,38 @@ internal object PdfLayout {
         }
         if (run.isNotEmpty()) out += rotatedLine(run)
         return out.filter { l -> l.chars.any { it.text.isNotBlank() } }
+    }
+
+    /**
+     * Scripts raised or lowered further than grouping by baseline allows (an exponent
+     * set high): a short line of smaller characters, within a bigger line's span and
+     * just above or below its baseline, joins that line.
+     */
+    private fun withScripts(lines: List<Line>): List<Line> {
+        val byY = lines.sortedBy { it.baseline }
+        val ys = DoubleArray(byY.size) { byY[it].baseline }
+        val extra = java.util.IdentityHashMap<Line, MutableList<PdfChar>>()
+        val moved = java.util.IdentityHashMap<Line, Boolean>()
+        for (s in lines) {
+            if (s.chars.size > 6 || s.x1 - s.x0 > s.size * 6) continue
+            // Hosts' baselines lie within an em or so of the script's.
+            var i = java.util.Arrays.binarySearch(ys, s.baseline - s.size * 2.5).let { if (it < 0) -it - 1 else it }
+            var host: Line? = null
+            while (i < byY.size && ys[i] < s.baseline + s.size * 2.5) {
+                val h = byY[i++]
+                if (h === s || moved.containsKey(h) || s.size >= h.size * 0.85 || extra.containsKey(s)) continue
+                if (s.x0 < h.x0 - h.size || s.x1 > h.x1 + h.size) continue
+                if (s.baseline < h.baseline - h.size * 0.9 || s.baseline > h.baseline + h.size * 0.5) continue
+                if (host == null || abs(h.baseline - s.baseline) < abs(host.baseline - s.baseline)) host = h
+            }
+            if (host == null) continue
+            extra.getOrPut(host) { ArrayList() } += s.chars
+            moved[s] = true
+        }
+        if (moved.isEmpty()) return lines
+        return lines.filter { !moved.containsKey(it) }.map { l ->
+            extra[l]?.let { Line((l.chars + it).sortedBy { c -> c.x }, l.baseline) } ?: l
+        }
     }
 
     private fun hypot(a: Double, b: Double) = Math.hypot(a, b)
@@ -442,8 +476,10 @@ internal object PdfLayout {
                 }
                 if (sameRow) { target = b; break }
                 if (abs(l.baseline - last.baseline) < last.size * 0.3) continue
-                // A line under a row of separate pieces (labels under pictures), reaching under another of them, follows none.
-                val underRow = blocks.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
+                // A line under a row of separate labels (under pictures), reaching under another of them, follows none
+                // (raised or lowered pieces of a formula, smaller than the line, aren't labels).
+                val underRow = last.size > l.size * 0.8 &&
+                    blocks.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
                 if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !underRow) { target = b; break }
                 if (l.top - b.last().bottom > l.size * 3) continue
             }
