@@ -94,4 +94,37 @@ class FuzzTool {
             println("FUZZ $seed: $runs copies, slowest ${worst}ms")
         }
     }
+
+    /** Converts damaged copies of the sample PDFs to each output format, reporting the same way. */
+    @Test
+    fun fuzzPdf() {
+        val runs = System.getProperty("officecanvas.fuzz").orEmpty().toIntOrNull()
+        assumeTrue("set -Pofficecanvas.fuzz=<copies per sample> to fuzz", runs != null)
+        val rnd = Random(System.getProperty("officecanvas.fuzzSeed")?.toIntOrNull() ?: 1)
+        val keepDir = File("build/fuzz").apply { mkdirs() }
+        val input = File.createTempFile("fuzz", ".pdf").apply { deleteOnExit() }
+        val output = File.createTempFile("fuzz", ".out").apply { deleteOnExit() }
+        for (seed in listOf("pdf_samples/sample.pdf", "pdf_samples/features.pdf", "pdf_samples/sample_aes256.pdf")) {
+            val src = res(seed)
+            var worst = 0L
+            repeat(runs!!) { k ->
+                input.writeBytes(mutate(src.readBytes(), rnd, true))
+                val format = ConvertFormat.values()[k % ConvertFormat.values().size]
+                var problem: Throwable? = null
+                val t = Thread(null, {
+                    try { PdfConverter.convert(input, output, format) }
+                    catch (e: OfficeCanvasException) { }
+                    catch (e: Throwable) { problem = e }
+                }, "fuzz", 1L shl 20)
+                val t0 = System.nanoTime()
+                t.start(); t.join(30_000)
+                val ms = (System.nanoTime() - t0) / 1_000_000
+                worst = maxOf(worst, ms)
+                if (t.isAlive) { input.copyTo(File(keepDir, "hang-$k-${src.name}"), true); println("FUZZ HANG $seed #$k"); t.interrupt(); return }
+                if (problem != null) { input.copyTo(File(keepDir, "error-$k-${src.name}"), true); println("FUZZ ERROR $seed #$k $format $problem") }
+                if (ms > 5000) println("FUZZ SLOW $seed #$k ${ms}ms")
+            }
+            println("FUZZ $seed: $runs copies, slowest ${worst}ms")
+        }
+    }
 }
