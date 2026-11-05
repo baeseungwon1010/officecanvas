@@ -2,6 +2,7 @@ package io.github.baeseungwon1010.officecanvas
 
 import io.github.baeseungwon1010.officecanvas.convert.ConvImage
 import io.github.baeseungwon1010.officecanvas.convert.DocxWriter
+import io.github.baeseungwon1010.officecanvas.convert.HwpWriter
 import io.github.baeseungwon1010.officecanvas.convert.HwpxWriter
 import io.github.baeseungwon1010.officecanvas.convert.PageSink
 import io.github.baeseungwon1010.officecanvas.convert.PdfLayout
@@ -18,7 +19,10 @@ enum class ConvertFormat {
     DOCX,
 
     /** Hangul (.hwpx, OWPML). */
-    HWPX
+    HWPX,
+
+    /** Hangul 5.0 binary (.hwp). */
+    HWP
 }
 
 /**
@@ -105,6 +109,7 @@ object PdfConverter {
                 val sink: PageSink = when (format) {
                     ConvertFormat.DOCX -> DocxWriter(output, font)
                     ConvertFormat.HWPX -> HwpxWriter(output, font)
+                    ConvertFormat.HWP -> HwpWriter(output, font)
                 }
                 for ((i, p) in pages.withIndex()) {
                     val c = reader.read(p)
