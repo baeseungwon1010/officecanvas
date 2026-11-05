@@ -77,10 +77,17 @@ object PdfConverter {
                 // is (a line of the text that happens to begin each page doesn't).
                 val seen = HashMap<String, MutableList<Pair<Int, List<Int>>>>()
                 val heights = HashMap<String, MutableList<Double>>()
-                for ((i, p) in pages.withIndex()) for ((k, band) in PdfLayout.bandKeys(reader.read(p))) {
-                    seen.getOrPut(k) { ArrayList() } += i to band.numbers
-                    heights.getOrPut(k) { ArrayList() } += band.baseline
+                // And pictures at one place on the pages (a logo, a banner): they float there.
+                val placed = HashMap<String, Int>()
+                for ((i, p) in pages.withIndex()) {
+                    val c = reader.read(p)
+                    for ((k, band) in PdfLayout.bandKeys(c)) {
+                        seen.getOrPut(k) { ArrayList() } += i to band.numbers
+                        heights.getOrPut(k) { ArrayList() } += band.baseline
+                    }
+                    for (key in c.pictures.map { PdfLayout.placeKey(it) }.toSet()) placed.merge(key, 1, Int::plus)
                 }
+                val decorations = placed.filterValues { it >= 2 && it >= pages.size * 0.4 }.keys
                 fun mostly(values: List<Int>, of: Int) = values.isNotEmpty() && values.groupingBy { it }.eachCount().maxOf { it.value } >= of * 0.8
                 val repeated = seen.filter { (k, occ) ->
                     val ys = heights.getValue(k).sorted(); val median = ys[ys.size / 2]
@@ -98,7 +105,7 @@ object PdfConverter {
                 var hangul = 0; var latin = 0
                 for ((i, p) in pages.withIndex()) {
                     val c = reader.read(p)
-                    margins += PdfLayout.margins(c, repeated, i + 1)
+                    margins += PdfLayout.margins(c, repeated, i + 1, decorations)
                     for (ch in c.chars) if (ch.text.isNotBlank()) {
                         fonts.merge(ch.font.family, 1, Int::plus)
                         if (ch.text[0] in '\uAC00'..'\uD7A3') hangul++ else latin++
@@ -126,7 +133,7 @@ object PdfConverter {
                 for ((i, p) in pages.withIndex()) {
                     val c = reader.read(p)
                     val pictures = c.pictures.mapNotNull { pic ->
-                        pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text) }
+                        pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || PdfLayout.placeKey(pic) in decorations) }
                     }
                     sink.page(PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1))
                 }

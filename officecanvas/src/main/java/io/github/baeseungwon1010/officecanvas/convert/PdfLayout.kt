@@ -207,14 +207,17 @@ internal object PdfLayout {
     }
 
     /** Where a page's content lies (left, top, right, bottom margins), from its text (but the [repeated] header and footer), rulings and pictures. */
-    fun margins(content: PdfPageContent, repeated: Set<String> = emptySet(), pageNumber: Int = 1): DoubleArray? {
+    /** A picture's place on its page, to find the ones at one place on many pages. */
+    fun placeKey(p: PdfPicture) = "${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.w)},${Math.round(p.h)}"
+
+    fun margins(content: PdfPageContent, repeated: Set<String> = emptySet(), pageNumber: Int = 1, decorations: Set<String> = emptySet()): DoubleArray? {
         val w = content.width; val h = content.height
         val xs = ArrayList<Double>(); val ys = ArrayList<Double>(); val xe = ArrayList<Double>(); val ye = ArrayList<Double>()
         for (l in lines(dedupe(content.chars.filter { !it.invisible && it.text.isNotEmpty() }), emptyList())) {
             if (l.x0 < 0 || l.x1 > w || l.top < 0 || l.bottom > h || isRepeated(l, h, repeated, pageNumber)) continue
             xs += l.x0; xe += l.x1; ys += l.top; ye += l.bottom
         }
-        for (p in content.pictures) if (p.w * p.h < w * h * 0.6) { xs += p.x; xe += p.x + p.w; ys += p.y; ye += p.y + p.h }
+        for (p in content.pictures) if (p.w * p.h < w * h * 0.6 && placeKey(p) !in decorations) { xs += p.x; xe += p.x + p.w; ys += p.y; ye += p.y + p.h }
         // Rulings and shading: a table's frame reaches past its text. Not a bar along the
         // page's edge (a banner, a bleed), which no table reaches.
         fun inside(x0: Double, y0: Double, x1: Double, y1: Double) = x0 > w * 0.01 && y0 > h * 0.01 && x1 < w * 0.99 && y1 < h * 0.99
