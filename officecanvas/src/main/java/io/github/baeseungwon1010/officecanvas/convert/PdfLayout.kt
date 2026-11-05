@@ -108,37 +108,55 @@ internal object PdfLayout {
         blocks(free).forEach { items += Item.Text(it) }
         tables.forEach { items += Item.Grid(it) }
         flowPictures.forEach { items += Item.Picture(it) }
-        val ordered = order(items)
-        val blocks = ArrayList<ConvBlock>()
-        var prevBottom = top
-        for (item in ordered) {
-            when (item) {
-                is Item.Text -> {
-                    // Text wraps at the column's edge, or before whatever stands to its right.
-                    val wrap = ordered.filter { o -> o !== item && o.x0 >= item.x1 - 1 && o.y0 < item.y1 && o.y1 > item.y0 }.minOfOrNull { it.x0 - 4 } ?: (w - right)
-                    val paras = paragraphs(item.lines, left, w - right, rulings, maxOf(wrap, item.x1), freeFills(content, tables))
-                    var first = true
-                    for ((para, bounds) in paras) {
-                        val before = if (first) (bounds.first - prevBottom).coerceAtLeast(0.0) else para.spaceBefore
-                        blocks += if (first) para.withSpaceBefore(before) else para
-                        prevBottom = bounds.second
-                        first = false
+        val fills = freeFills(content, tables)
+        /** [items] in reading order as blocks between [x0] and [x1], the first measured from [top]. */
+        fun flow(items: List<Item>, x0: Double, x1: Double, top: Double): List<ConvBlock> {
+            val blocks = ArrayList<ConvBlock>()
+            var prevBottom = top
+            for (item in items) {
+                when (item) {
+                    is Item.Text -> {
+                        // Text wraps at the column's edge, or before whatever stands to its right.
+                        val wrap = items.filter { o -> o !== item && o.x0 >= item.x1 - 1 && o.y0 < item.y1 && o.y1 > item.y0 }.minOfOrNull { it.x0 - 4 } ?: x1
+                        val paras = paragraphs(item.lines, x0, x1, rulings, maxOf(wrap, item.x1), fills)
+                        var first = true
+                        for ((para, bounds) in paras) {
+                            val before = if (first) (bounds.first - prevBottom).coerceAtLeast(0.0) else para.spaceBefore
+                            blocks += if (first) para.withSpaceBefore(before) else para
+                            prevBottom = bounds.second
+                            first = false
+                        }
+                    }
+                    is Item.Grid -> {
+                        blocks += item.table.build(x0, x1, rulings, (item.table.y0 - prevBottom).coerceAtLeast(0.0))
+                        prevBottom = item.table.y1
+                    }
+                    is Item.Picture -> {
+                        val p = item.picture
+                        val img = ConvImage(p.data, p.png, p.pixelWidth, p.pixelHeight, p.width, p.height, p.x - x0, p.y)
+                        val center = abs((p.x + p.width / 2) - (x0 + x1) / 2) < 6 && p.x - x0 > 10
+                        blocks += ConvParagraph(emptyList(), if (center) ConvAlign.CENTER else ConvAlign.LEFT,
+                            leftIndent = if (center) 0.0 else (p.x - x0).coerceAtLeast(0.0), spaceBefore = (p.y - prevBottom).coerceAtLeast(0.0), image = img)
+                        prevBottom = p.y + p.height
+                    }
+                    is Item.Columns -> {
+                        // Parts side by side stay side by side: a borderless row, one cell each.
+                        val edges = ArrayList<Double>()
+                        edges += x0
+                        for (k in 1 until item.parts.size) edges += max(item.parts[k].minOf { it.x0 } - 4, edges.last() + 1)
+                        edges += max(x1, item.x1)
+                        val cells = item.parts.mapIndexed { k, part ->
+                            ConvCell(0, k, 1, 1, flow(part, edges[k] + 1.5, edges[k + 1] - 1.5, item.y0))
+                        }
+                        blocks += ConvTable(0.0, (0 until item.parts.size).map { edges[it + 1] - edges[it] }, listOf(item.y1 - item.y0), cells,
+                            (item.y0 - prevBottom).coerceAtLeast(0.0))
+                        prevBottom = item.y1
                     }
                 }
-                is Item.Grid -> {
-                    blocks += item.table.build(left, w - right, rulings, (item.table.y0 - prevBottom).coerceAtLeast(0.0))
-                    prevBottom = item.table.y1
-                }
-                is Item.Picture -> {
-                    val p = item.picture
-                    val img = ConvImage(p.data, p.png, p.pixelWidth, p.pixelHeight, p.width, p.height, p.x - left, p.y)
-                    val center = abs((p.x + p.width / 2) - (left + (w - right)) / 2) < 6 && p.x - left > 10
-                    blocks += ConvParagraph(emptyList(), if (center) ConvAlign.CENTER else ConvAlign.LEFT,
-                        leftIndent = if (center) 0.0 else (p.x - left).coerceAtLeast(0.0), spaceBefore = (p.y - prevBottom).coerceAtLeast(0.0), image = img)
-                    prevBottom = p.y + p.height
-                }
             }
+            return blocks
         }
+        val blocks = flow(order(items), left, w - right, top)
         fun decor(ls: List<Line>): List<ConvParagraph> = if (ls.isEmpty()) emptyList() else
             blocks(ls).flatMap { paragraphs(it, left, w - right, rulings) }.map { (p, _) -> withPageField(p, pageNumber) }
         val heads = bandLines.filter { it.bottom < h * BAND }
@@ -245,18 +263,47 @@ internal object PdfLayout {
             if (best < 0) { groups += mutableListOf(c); baselines += c.y; sizes += c.size } else groups[best] += c
             if (groups.size > 20_000) break
         }
+        // Column gutters can be narrower than the gap that splits a line: a gap splits
+        // it too where the lines around it leave the same place empty, with lines on both sides.
+        val ink = groups.map { m -> m.filter { !it.isSpace && it.text.isNotBlank() }.sortedBy { it.x } }
+        val byY = groups.indices.sortedBy { baselines[it] }
+        val rank = IntArray(groups.size).also { r -> byY.forEachIndexed { i, g -> r[g] = i } }
+        fun gutter(g: Int, m: Double, em: Double): Boolean {
+            // Lines on each side, counted outward each way up to the first line with ink
+            // there (a heading across both columns ends them).
+            var left = 0; var right = 0
+            for (dir in intArrayOf(-1, 1)) {
+                var i = rank[g] + dir
+                while (i in byY.indices && abs(baselines[byY[i]] - baselines[g]) < em * 6) {
+                    val row = ink[byY[i]]
+                    i += dir
+                    if (row.any { it.x < m + em * 0.15 && it.x + it.width > m - em * 0.15 }) break
+                    if (row.any { it.x + it.width <= m }) left++
+                    if (row.any { it.x >= m }) right++
+                }
+            }
+            return left >= 2 && right >= 2
+        }
         for ((g, members) in groups.withIndex()) {
             val sorted = members.sortedBy { it.x }
             var cur = ArrayList<PdfChar>()
+            var lastInk: PdfChar? = null
+            var pieceStart = Double.NaN
             for (c in sorted) {
                 val prev = cur.lastOrNull()
+                val isInk = !c.isSpace && c.text.isNotBlank()
                 if (prev != null) {
                     val gap = c.x - (prev.x + prev.width)
                     val em = max(min(prev.size, c.size), 1.0)
                     val ruled = verticals.any { v -> v.x0 > prev.x + prev.width * 0.5 && v.x0 < c.x + c.width * 0.5 && v.y0 < baselines[g] && v.y1 > baselines[g] - em * 0.6 }
-                    if (gap > em * 1.6 || ruled || gap < -em * 3) { out += Line(cur, baselines[g]); cur = ArrayList() }
+                    val inkGap = lastInk?.let { c.x - (it.x + it.width) } ?: 0.0
+                    // A column's text on the left, not a bullet or a number.
+                    val gutter = isInk && inkGap > em * 0.8 && inkGap <= em * 1.6 && lastInk != null && lastInk.x + lastInk.width - pieceStart > em * 4 &&
+                        gutter(g, c.x - inkGap / 2, em)
+                    if (gap > em * 1.6 || ruled || gap < -em * 3 || gutter) { out += Line(cur, baselines[g]); cur = ArrayList(); pieceStart = Double.NaN }
                 }
                 cur += c
+                if (isInk) { lastInk = c; if (pieceStart.isNaN()) pieceStart = c.x }
             }
             if (cur.isNotEmpty()) out += Line(cur, baselines[g])
         }
@@ -336,11 +383,42 @@ internal object PdfLayout {
         class Picture(val picture: ConvImage) : Item() {
             override val x0 = picture.x; override val y0 = picture.y; override val x1 = picture.x + picture.width; override val y1 = picture.y + picture.height
         }
+        /** Parts standing side by side, left to right, each in reading order. */
+        class Columns(val parts: List<List<Item>>) : Item() {
+            override val x0 = parts.first().minOf { it.x0 }; override val y0 = parts.minOf { p -> p.minOf { it.y0 } }
+            override val x1 = parts.last().maxOf { it.x1 }; override val y1 = parts.maxOf { p -> p.maxOf { it.y1 } }
+        }
     }
 
     /** Lines into blocks: each line joins the block above it when close below it, overlapping it and of about its size. */
     private fun blocks(lines: List<Line>): List<List<Line>> {
         val blocks = ArrayList<MutableList<Line>>()
+        val byY = lines.sortedBy { it.baseline }
+        val rank = java.util.IdentityHashMap<Line, Int>().also { m -> byY.forEachIndexed { i, l -> m[l] = i } }
+        val textRight = lines.maxOfOrNull { it.x1 } ?: 0.0
+        // The gutter between columns: what's left of the gap between [a] and [b] beside
+        // the lines near [l] (up to a line across it, a heading over both columns),
+        // still half an em wide, with lines on both sides.
+        fun gutter(l: Line, a: Double, b: Double): Boolean {
+            val i0 = rank.getValue(l)
+            var lo = a; var hi = b
+            var left = 0; var right = 0
+            for (dir in intArrayOf(-1, 1)) {
+                var i = i0 + dir
+                while (i in byY.indices && abs(byY[i].baseline - l.baseline) < l.size * 6) {
+                    val o = byY[i]
+                    i += dir
+                    when {
+                        o.x1 <= lo -> left++
+                        o.x0 >= hi -> right++
+                        o.x0 < lo && o.x1 < hi -> { lo = o.x1; left++ }
+                        o.x0 > lo && o.x1 > hi -> { hi = o.x0; right++ }
+                        else -> break
+                    }
+                }
+            }
+            return hi - lo > l.size * 0.5 && left >= 2 && right >= 2
+        }
         for (l in lines.sortedWith(compareBy<Line> { it.baseline }.thenBy { it.x0 })) {
             var target: MutableList<Line>? = null
             for (b in blocks.asReversed()) {
@@ -348,11 +426,23 @@ internal object PdfLayout {
                 val gap = l.top - last.bottom
                 val overlap = min(l.x1, b.maxOf { it.x1 }) - max(l.x0, b.minOf { it.x0 })
                 val sizeOk = l.size / last.size in 0.7..1.43
-                // Another piece of a line in this block (after a wide gap, a tab) joins it.
-                val sameRow = b.any { o -> abs(o.baseline - l.baseline) < o.size * 0.3 && l.x0 - o.x1 < max(o.size, l.size) * 6 && o.x1 <= l.x0 + o.size }
+                // Another piece of a line in this block (after a wide gap, a tab) joins it, but not a
+                // column's line beside the other column's (a bullet or a number beside its text leaves a
+                // gap down the list too, but has no column on its left). Far apart, only after a short
+                // piece (a table's rows without rulings) or up to the text's right edge (a right tab
+                // stop), not after a paragraph's line (a caption beside it).
+                val sameRow = b.any { o ->
+                    abs(o.baseline - l.baseline) < o.size * 0.3 && o.x1 <= l.x0 + o.size && run {
+                        val far = l.x0 - o.x1 >= max(o.size, l.size) * 6
+                        (!far || o.x1 - o.x0 < o.size * 15 || l.x1 > textRight - l.size) &&
+                            !((far || max(l.x1 - l.x0, o.x1 - o.x0) > l.size * 15) && o.x1 - o.x0 > o.size * 4 && gutter(l, o.x1, l.x0))
+                    }
+                }
                 if (sameRow) { target = b; break }
                 if (abs(l.baseline - last.baseline) < last.size * 0.3) continue
-                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk) { target = b; break }
+                // A line under a row of separate pieces (labels under pictures), reaching under another of them, follows none.
+                val underRow = blocks.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
+                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !underRow) { target = b; break }
                 if (l.top - b.last().bottom > l.size * 3) continue
             }
             if (target == null) blocks += mutableListOf(l) else target += l
@@ -372,30 +462,34 @@ internal object PdfLayout {
 
     /**
      * Reading order: cut the region along an empty vertical band crossing it all
-     * (columns, read left to right), else along its widest empty horizontal band
-     * (read top to bottom), and so on in each part.
+     * (columns, kept side by side as one [Item.Columns]), else along its widest
+     * empty horizontal band (read top to bottom), and so on in each part.
      */
     private fun order(items: List<Item>, depth: Int = 0): List<Item> {
         if (items.size <= 1 || depth > 40) return items.sortedBy { it.y0 }
-        val minSize = 6.0
-        // Vertical cut: x gap crossing all items.
+        // Vertical cut: the widest x gap crossing all items.
         val byX = items.sortedBy { it.x0 }
         var reach = byX[0].x1
         var best: Pair<Int, Double>? = null
         for (i in 1 until byX.size) {
             val gap = byX[i].x0 - reach
-            if (gap > minSize * 1.5 && (best == null || gap > best.second)) best = i to gap
+            if (best == null || gap > best.second) best = i to gap
             reach = max(reach, byX[i].x1)
         }
-        if (best != null) {
-            val cut = byX[best.first].x0
-            val (l, r) = items.partition { it.x1 <= cut }
+        /** The parts either side of the vertical cut, side by side, if they run side by side. */
+        fun columns(): List<Item>? {
+            val l = byX.subList(0, best!!.first); val r = byX.subList(best.first, byX.size)
             // Columns run side by side: most of the smaller side's items share heights with the other's.
             // Items to the right of others but stacked between them (labels and their formulas) aren't columns.
             val (small, big) = if (l.size <= r.size) l to r else r to l
             val beside = small.count { s -> big.any { b -> min(s.y1, b.y1) - max(s.y0, b.y0) > 0 } }
-            if (l.isNotEmpty() && r.isNotEmpty() && beside >= small.size * 0.5) return order(l, depth + 1) + order(r, depth + 1)
+            if (l.isEmpty() || r.isEmpty() || beside < small.size * 0.5) return null
+            fun parts(side: List<Item>) = order(side, depth + 1).let { (it.singleOrNull() as? Item.Columns)?.parts ?: listOf(it) }
+            return listOf(Item.Columns(parts(l) + parts(r)))
         }
+        // Text needs a clear gap; pictures alone may touch (a row of them).
+        val minGap = if (items.all { it is Item.Picture }) -2.0 else 9.0
+        if (best != null && best.second > minGap) columns()?.let { return it }
         val byY = items.sortedBy { it.y0 }
         var bottom = byY[0].y1
         var bestY: Pair<Int, Double>? = null
@@ -409,6 +503,8 @@ internal object PdfLayout {
             val (t, b) = items.partition { it.y1 <= cut + 0.01 }
             if (t.isNotEmpty() && b.isNotEmpty()) return order(t, depth + 1) + order(b, depth + 1)
         }
+        // Neither cut: parts that only touch (a line running up to the next column) still stand side by side.
+        if (best != null && best.second > -2.0) columns()?.let { return it }
         return byY
     }
 
