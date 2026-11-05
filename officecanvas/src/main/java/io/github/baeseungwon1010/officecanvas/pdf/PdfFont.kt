@@ -94,6 +94,15 @@ internal class PdfFont private constructor(
             "Courier" to "Courier New", "CourierNew" to "Courier New", "Symbol" to "Symbol", "ZapfDingbats" to "Wingdings"
         )
 
+        private val CLONES = listOf(
+            listOf("nimbusrom", "nimbusroman", "texgyretermes", "freeserif", "tinos", "timesroman", "times") to "Times New Roman",
+            listOf("nimbussan", "texgyreheros", "freesans", "arimo", "helvetica") to "Arial",
+            listOf("nimbusmon", "texgyrecursor", "freemono", "cousine", "courier") to "Courier New",
+            listOf("cmss", "lmsans", "sfss") to "Arial",
+            listOf("cmtt", "lmmono", "sftt") to "Courier New",
+            listOf("cmr", "cmbx", "cmti", "cmsl", "cmcsc", "lmroman", "sfrm", "sfbx", "sfti") to "Times New Roman"
+        )
+
         /** PostScript names of Korean fonts and the names Word and Hangul know them by. */
         private val KOREAN = mapOf(
             "malgungothic" to "맑은 고딕", "malgun" to "맑은 고딕", "batang" to "바탕", "batangche" to "바탕체", "gulim" to "굴림",
@@ -105,7 +114,7 @@ internal class PdfFont private constructor(
             "hyheadline" to "HY헤드라인M", "hygraphic" to "HY그래픽", "pretendard" to "Pretendard", "spoqahansansneo" to "Spoqa Han Sans Neo"
         )
 
-        private val STYLE_WORDS = Regex("(?i)[-,_ ]?(bold|black|heavy|semibold|demibold|extrabold|ultrabold|medium|light|thin|regular|italic|oblique|roman|book|normal|condensed|narrow|mt|ps|psmt|it|bd|bdit)$")
+        private val STYLE_WORDS = Regex("(?i)[-,_ ]?(bold|black|heavy|semibold|demibold|extrabold|ultrabold|medium|light|thin|regular|italic|oblique|roman|book|normal|condensed|narrow|mt|ps|psmt|it|bd|bdit|regu|medi|ital|reguital|mediital)$")
 
         fun load(doc: PdfDocument, fontObj: PdfObj?, depth: Int = 0): PdfFont? {
             val d = doc.dict(fontObj) ?: return null
@@ -326,6 +335,9 @@ internal class PdfFont private constructor(
             KOREAN[key]?.let { return it }
             KOREAN.entries.firstOrNull { key.startsWith(it.key) }?.let { return it.value }
             // "ArialMT", "TimesNewRomanPSMT", "Calibri", "CambriaMath".
+            // Metric clones (URW, TeX Gyre, GNU Free, Croscore) under the names
+            // documents expect, and TeX's Computer and Latin Modern as the nearest of those.
+            for ((prefixes, family) in CLONES) if (prefixes.any { key.startsWith(it) }) return family
             return when {
                 key.startsWith("arial") -> "Arial"
                 key.startsWith("timesnewroman") -> "Times New Roman"
