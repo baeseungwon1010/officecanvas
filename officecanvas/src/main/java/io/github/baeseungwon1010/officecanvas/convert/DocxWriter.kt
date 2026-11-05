@@ -113,9 +113,10 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     private fun paragraph(p: ConvParagraph, pageBreak: Boolean = false, extra: String = "") {
         body.append("<w:p><w:pPr>")
         if (pageBreak) body.append("<w:pageBreakBefore/>")
-        if (p.tabs.isNotEmpty()) {
+        if (p.tabs.isNotEmpty() || p.rightTabs.isNotEmpty()) {
             body.append("<w:tabs>")
-            for (t in p.tabs.take(30)) body.append("<w:tab w:val=\"left\" w:pos=\"${tw(t)}\"/>")
+            for ((t, right) in (p.tabs.map { it to false } + p.rightTabs.map { it to true }).sortedBy { it.first }.take(30))
+                body.append("<w:tab w:val=\"${if (right) "right" else "left"}\" w:pos=\"${tw(t)}\"/>")
             body.append("</w:tabs>")
         }
         body.append("<w:spacing w:before=\"${tw(p.spaceBefore)}\" w:after=\"0\"")

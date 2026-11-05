@@ -134,13 +134,15 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
         // The PDF's line pitch, fixed (a one-line paragraph without one: about single spacing, not Hangul's default 160 %).
         val spacing = p.lineHeight?.let { "FIXED:" + hu(it.coerceIn(size * 0.8, size * 6)) } ?: "PERCENT:130"
         val left = hu(p.leftIndent); val right = hu(p.rightIndent); val indent = hu(p.firstLine); val prev = hu(p.spaceBefore)
-        val tab = tabPr(p.tabs)
+        val tab = tabPr(p.tabs, p.rightTabs)
         val fill = p.shading?.let { borderFill(null, null, null, null, it) } ?: 2
         val key = "$align|$left|$right|$indent|$prev|$spacing|$tab|$fill"
         return paraPrs.getOrPut(key) { paraPrs.size }
     }
 
-    private fun tabPr(stops: List<Double>): Int = tabPrs.getOrPut(stops.joinToString(",") { hu(it).toString() }) { tabPrs.size }
+    /** Stops as "pos" (left) or "pos:R" (right), in order. */
+    private fun tabPr(stops: List<Double>, right: List<Double> = emptyList()): Int =
+        tabPrs.getOrPut((stops.map { hu(it) to "" } + right.map { hu(it) to ":R" }).sortedBy { it.first }.joinToString(",") { "${it.first}${it.second}" }) { tabPrs.size }
 
     private fun charPr(r: ConvRun): Int {
         val f = font(r.font)
@@ -249,7 +251,7 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
 
     private fun headerFooter(kind: String, paras: List<ConvParagraph>, width: Long, height: Long): String {
         val sb = StringBuilder()
-        for (p in paras) paragraph(ConvParagraph(p.runs, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs), into = sb)
+        for (p in paras) paragraph(ConvParagraph(p.runs, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs, rightTabs = p.rightTabs), into = sb)
         return "<hp:ctrl><hp:$kind id=\"${objectId++}\" applyPageType=\"BOTH\"><hp:subList id=\"\" textDirection=\"HORIZONTAL\" lineWrap=\"BREAK\" vertAlign=\"${if (kind == "header") "TOP" else "BOTTOM"}\" linkListIDRef=\"0\" linkListNextIDRef=\"0\" textWidth=\"$width\" textHeight=\"$height\" hasTextRef=\"0\" hasNumRef=\"0\">$sb</hp:subList></hp:$kind></hp:ctrl>"
     }
 
@@ -298,7 +300,7 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
         for ((key, id) in tabPrs) {
             if (key.isEmpty()) { sb.append("<hh:tabPr id=\"$id\" autoTabLeft=\"0\" autoTabRight=\"0\"/>"); continue }
             sb.append("<hh:tabPr id=\"$id\" autoTabLeft=\"0\" autoTabRight=\"0\">")
-            for (pos in key.split(',')) sb.append("<hh:tabItem pos=\"$pos\" type=\"LEFT\" leader=\"NONE\"/>")
+            for (stop in key.split(',')) sb.append("<hh:tabItem pos=\"${stop.removeSuffix(":R")}\" type=\"${if (stop.endsWith(":R")) "RIGHT" else "LEFT"}\" leader=\"NONE\"/>")
             sb.append("</hh:tabPr>")
         }
         sb.append("</hh:tabProperties><hh:numberings itemCnt=\"0\"/>")

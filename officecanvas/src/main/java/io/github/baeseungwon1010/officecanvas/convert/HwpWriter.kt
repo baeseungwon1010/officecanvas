@@ -194,7 +194,7 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         list.u32(bodyWidth().toInt()); list.u32(hu(maxOf(if (kind == "head") (section?.marginTop ?: 0.0) - headerTop else (section?.marginBottom ?: 0.0) - footerBottom, 10.0)).toInt())
         list.u8(0); list.u8(0); list.zeros(16)
         r.add(LIST_HEADER, level + 1, list.bytes())
-        for (p in paras) paragraph(r, level + 1, ConvParagraph(p.runs, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs))
+        for (p in paras) paragraph(r, level + 1, ConvParagraph(p.runs, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs, rightTabs = p.rightTabs))
     }
 
     private fun autoNumber(r: Records, level: Int) {
@@ -289,11 +289,13 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         val size = p.runs.maxOfOrNull { it.size } ?: 10.0
         val percent = p.lineHeight?.let { (it / size * 100).roundToLong().coerceIn(80, 400) } ?: 130
         val fill = p.shading?.let { borderFill(null, null, null, null, it) } ?: 1
-        val key = "$align|${hu(p.leftIndent)}|${hu(p.rightIndent)}|${hu(p.firstLine)}|${hu(p.spaceBefore)}|$percent|${tabDef(p.tabs)}|$fill"
+        val key = "$align|${hu(p.leftIndent)}|${hu(p.rightIndent)}|${hu(p.firstLine)}|${hu(p.spaceBefore)}|$percent|${tabDef(p.tabs, p.rightTabs)}|$fill"
         return paraShapes.getOrPut(key) { paraShapes.size }
     }
 
-    private fun tabDef(stops: List<Double>): Int = tabDefs.getOrPut(stops.joinToString(",") { hu(it).toString() }) { tabDefs.size }
+    /** Stops as "pos" (left) or "pos:R" (right), in order. */
+    private fun tabDef(stops: List<Double>, right: List<Double> = emptyList()): Int =
+        tabDefs.getOrPut((stops.map { hu(it) to "" } + right.map { hu(it) to ":R" }).sortedBy { it.first }.joinToString(",") { "${it.first}${it.second}" }) { tabDefs.size }
 
     /** A border/fill's id (1-based, as Hangul refers to them). */
     private fun borderFill(top: ConvBorder?, bottom: ConvBorder?, left: ConvBorder?, right: ConvBorder?, fill: Int?): Int {
@@ -350,9 +352,10 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         }
         for (key in tabDefs.keys) {
             val b = Bytes()
-            val stops = if (key.isEmpty()) emptyList() else key.split(',').map { it.toLong() }
+            val stops = if (key.isEmpty()) emptyList() else key.split(',')
             b.u32(0); b.u32(stops.size)
-            for (s in stops) { b.u32(s.toInt()); b.u8(0); b.u8(0); b.u16(0) }
+            // Position, kind (0 left, 1 right), fill, padding.
+            for (s in stops) { b.u32(s.removeSuffix(":R").toInt()); b.u8(if (s.endsWith(":R")) 1 else 0); b.u8(0); b.u16(0) }
             r.add(TAB_DEF, 1, b.bytes())
         }
         for (key in paraShapes.keys) {

@@ -38,7 +38,9 @@ internal class ConvParagraph(
     /** Left tab stops, from the column's left edge, for the tabs in [runs]. */
     val tabs: List<Double> = emptyList(),
     /** A color filling the paragraph's box (a bar behind a heading, a band behind a formula). */
-    val shading: Int? = null
+    val shading: Int? = null,
+    /** Right tab stops (the text after the tab ends there), from the column's left edge. */
+    val rightTabs: List<Double> = emptyList()
 ) : ConvBlock() {
     val text: String get() = runs.joinToString("") { it.text }
 }

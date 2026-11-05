@@ -157,11 +157,11 @@ internal object PdfLayout {
             }
             runs += if (last == 0) r else r.copyText(r.text.substring(last))
         }
-        return ConvParagraph(runs.filter { it.text.isNotEmpty() }, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs)
+        return ConvParagraph(runs.filter { it.text.isNotEmpty() }, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs, rightTabs = p.rightTabs)
     }
 
     private fun ConvParagraph.withSpaceBefore(v: Double) =
-        ConvParagraph(runs, align, leftIndent, rightIndent, firstLine, v, lineHeight, image, tabs, shading)
+        ConvParagraph(runs, align, leftIndent, rightIndent, firstLine, v, lineHeight, image, tabs, shading, rightTabs)
 
     /** Filled rectangles outside the tables, which may lie behind paragraphs. */
     private fun freeFills(content: PdfPageContent, tables: List<TableGrid>) = content.rects.filter { r ->
@@ -462,6 +462,7 @@ internal object PdfLayout {
         for (g in groups) {
             val runs = ArrayList<ConvRun>()
             val tabs = ArrayList<Double>()
+            val rightTabs = ArrayList<Double>()
             for ((k, row) in g.withIndex()) {
                 if (k > 0) {
                     // Lines of one paragraph join with a space (a hyphen at a line's end joins the word).
@@ -481,7 +482,9 @@ internal object PdfLayout {
                         // A wide gap mid-line: a tab.
                         val last = runs.lastOrNull()
                         if (last != null) runs[runs.size - 1] = last.copyText(last.text.trimEnd() + "\t")
-                        tabs += piece.x0 - colLeft
+                        // The last piece ending at the column's edge is right-aligned there.
+                        if (j == row.size - 1 && piece.x1 > colRight - piece.size * 0.5) rightTabs += min(piece.x1, colRight) - colLeft
+                        else tabs += piece.x0 - colLeft
                     }
                     runs(piece, rulings, runs)
                 }
@@ -523,7 +526,8 @@ internal object PdfLayout {
                 spaceBefore = spaceBefore,
                 lineHeight = box,
                 tabs = tabs.map { Math.round(it * 2) / 2.0 }.distinct().sorted(),
-                shading = shade?.color
+                shading = shade?.color,
+                rightTabs = rightTabs.map { Math.round(it * 2) / 2.0 }.distinct().sorted()
             )
             out += para to (boxTop to boxBottom)
             prevBottom = boxBottom
