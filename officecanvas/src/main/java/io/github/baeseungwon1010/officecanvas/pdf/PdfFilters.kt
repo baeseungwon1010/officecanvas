@@ -13,7 +13,7 @@ internal object PdfFilters {
     /** Decoded bytes, and the image codec still to apply, if any. */
     class Decoded(val bytes: ByteArray, val imageCodec: String?, val codecParms: PdfDict?)
 
-    const val MAX_OUTPUT = 256 shl 20
+    const val MAX_OUTPUT = 64 shl 20
 
     private val IMAGE_CODECS = setOf("DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode")
 

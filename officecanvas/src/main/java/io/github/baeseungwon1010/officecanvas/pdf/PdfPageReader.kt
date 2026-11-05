@@ -376,9 +376,9 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         const val MAX_PICTURES = 2000
         const val MAX_FORM_DEPTH = 12
 
-        fun gray(v: Double): Int { val g = (v.coerceIn(0.0, 1.0) * 255).toInt(); return (0xFF shl 24) or (g shl 16) or (g shl 8) or g }
-        fun rgbOf(r: Double, g: Double, b: Double): Int =
-            (0xFF shl 24) or ((r.coerceIn(0.0, 1.0) * 255).toInt() shl 16) or ((g.coerceIn(0.0, 1.0) * 255).toInt() shl 8) or (b.coerceIn(0.0, 1.0) * 255).toInt()
+        private fun byte(v: Double) = (v.coerceIn(0.0, 1.0) * 255 + 0.5).toInt()
+        fun gray(v: Double): Int { val g = byte(v); return (0xFF shl 24) or (g shl 16) or (g shl 8) or g }
+        fun rgbOf(r: Double, g: Double, b: Double): Int = (0xFF shl 24) or (byte(r) shl 16) or (byte(g) shl 8) or byte(b)
         fun cmyk(c: Double, m: Double, y: Double, k: Double): Int {
             val kk = k.coerceIn(0.0, 1.0)
             return rgbOf((1 - c.coerceIn(0.0, 1.0)) * (1 - kk), (1 - m.coerceIn(0.0, 1.0)) * (1 - kk), (1 - y.coerceIn(0.0, 1.0)) * (1 - kk))

@@ -15,6 +15,7 @@ internal object PdfImages {
     class Image(val data: ByteArray, val png: Boolean, val width: Int, val height: Int)
 
     const val MAX_PIXELS = 16_000_000L
+    const val MAX_JPEG_PIXELS = 200_000_000L
 
     fun decode(doc: PdfDocument, s: PdfStream, fill: Int): Image? = try {
         val dec = doc.decode(s) ?: null
@@ -57,8 +58,10 @@ internal object PdfImages {
     private fun build(doc: PdfDocument, d: PdfDict, data: ByteArray, codec: String?, unused: Any?, fill: Int, smask: PdfStream?): Image? {
         val w = (doc.num(d["Width"]) ?: return null).toInt()
         val h = (doc.num(d["Height"]) ?: return null).toInt()
-        if (w <= 0 || h <= 0 || w.toLong() * h > MAX_PIXELS) return null
-        if (codec == "DCTDecode") return Image(data, false, w, h)
+        if (w <= 0 || h <= 0) return null
+        // JPEG data is handed on as it is, so a large one costs only its bytes.
+        if (codec == "DCTDecode") return if (w.toLong() * h <= MAX_JPEG_PIXELS) Image(data, false, w, h) else null
+        if (w.toLong() * h > MAX_PIXELS) return null
         if (codec != null) return null
         val mask = (doc.resolve(d["ImageMask"]) as? PdfBool)?.value == true
         val bpc = if (mask) 1 else (doc.num(d["BitsPerComponent"])?.toInt() ?: 8).coerceIn(1, 16)
