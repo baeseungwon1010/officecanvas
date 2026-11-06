@@ -140,7 +140,8 @@ internal object PdfLayout {
             fun touch(a: ConvImage, b: ConvImage): Boolean {
                 val ox = min(a.x + a.width, b.x + b.width) - max(a.x, b.x)
                 val oy = min(a.y + a.height, b.y + b.height) - max(a.y, b.y)
-                return ox > -1 && oy > -1 && (ox > min(a.width, b.width) * 0.5 || oy > min(a.height, b.height) * 0.5)
+                // Edge to edge, not one over the other (a figure over a page's background isn't a strip of it).
+                return abs(ox) <= 1.5 && oy > min(a.height, b.height) * 0.5 || abs(oy) <= 1.5 && ox > min(a.width, b.width) * 0.5
             }
             for (i in placed.indices) for (j in i + 1 until placed.size) if (touch(placed[i].first, placed[j].first)) parent[find(i)] = find(j)
             val floats = placed.indices.filter { placed[it].second === floating }.map { find(it) }.toSet()
