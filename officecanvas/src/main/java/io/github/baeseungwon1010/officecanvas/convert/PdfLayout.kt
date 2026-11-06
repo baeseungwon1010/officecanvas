@@ -2,6 +2,8 @@ package io.github.baeseungwon1010.officecanvas.convert
 
 import io.github.baeseungwon1010.officecanvas.pdf.PdfChar
 import io.github.baeseungwon1010.officecanvas.pdf.PdfFont
+import io.github.baeseungwon1010.officecanvas.pdf.StandardWidths
+import java.util.IdentityHashMap
 import io.github.baeseungwon1010.officecanvas.pdf.PdfPageContent
 import io.github.baeseungwon1010.officecanvas.pdf.PdfPicture
 import kotlin.math.abs
@@ -431,7 +433,16 @@ internal object PdfLayout {
         var prev: PdfChar? = null
         val sb = StringBuilder()
         var style: ConvRun? = null
-        fun flush() { style?.let { if (sb.isNotEmpty()) out += it.copyText(sb.toString()) }; sb.clear() }
+        // In a standard face standing in for the PDF's font: its width there and in the PDF, scaled to match.
+        var pdfWidth = 0.0; var faceWidth = 0.0
+        fun flush() {
+            style?.let { s ->
+                val fit = if (faceWidth > 0) pdfWidth / faceWidth else 1.0
+                val r = if (s.font in STANDARD && faceWidth > 0 && fit in 0.6..1.4) ConvRun(s.text, s.font, s.size, s.bold, s.italic, s.underline, s.color, s.script, s.field, s.spacing, Math.round(fit * 100).toInt(), s.mono, s.serif) else s
+                if (sb.isNotEmpty()) out += r.copyText(sb.toString())
+            }
+            sb.clear(); pdfWidth = 0.0; faceWidth = 0.0
+        }
         for (c in line.chars) {
             // (Spaces in a monospaced line line things up: each one stays.)
             if (c.isSpace || c.text.isBlank()) { if (sb.isNotEmpty() && (sb.last() != ' ' || c.font.monospace)) sb.append(' '); prev = c; continue }
@@ -444,7 +455,7 @@ internal object PdfLayout {
             val size = if (script != 0) line.size else Math.round(c.size * 2) / 2.0
             // Sizes go in half points: the width they lose or gain is scaled back, with the PDF's own scaling.
             val scale = if (script != 0) 100 else Math.round(c.hScale * c.size / size * 100).toInt().coerceIn(50, 200)
-            val s = ConvRun("", c.font.family, size, c.font.bold, c.font.italic || c.slanted, under, c.color and 0xFFFFFF or (0xFF shl 24), script,
+            val s = ConvRun("", c.substitute ?: c.font.family, size, c.font.bold, c.font.italic || c.slanted, under, c.color and 0xFFFFFF or (0xFF shl 24), script,
                 spacing = Math.round(c.tracking * 20) / 20.0, scale = scale, mono = c.font.monospace, serif = c.font.serif)
             val p = prev
             if (p != null && sb.isNotEmpty() && sb.last() != ' ') {
@@ -456,6 +467,7 @@ internal object PdfLayout {
                 flush(); style = s
             }
             sb.append(c.text)
+            if (c.substitute != null) StandardWidths.width(c.substitute!!, c.font.bold, c.font.italic, c.text)?.let { faceWidth += it * size / 1000; pdfWidth += c.glyphWidth }
             prev = c
         }
         flush()
@@ -480,7 +492,18 @@ internal object PdfLayout {
         }
         val found = gaps.mapValues { (_, v) -> if (v.size < 20) 0.0 else v.sorted()[v.size / 4].takeIf { abs(it) in 0.01..0.1 } ?: 0.0 }
         for (l in lines) for (c in l.chars) found[c.font to Math.round(c.size * 100)]?.let { c.tracking = it * c.size }
+        // A font readers seldom have, setting no CJK text here, is set in the standard face like it.
+        val cjk = HashSet<PdfFont>()
+        for (l in lines) for (c in l.chars) if (c.text.any { it in '\u1100'..'\u11FF' || it in '\u2E80'..'\u9FFF' || it in '\uAC00'..'\uD7AF' || it in '\uF900'..'\uFAFF' || it in '\uFF00'..'\uFFEF' }) cjk += c.font
+        val standard = IdentityHashMap<PdfFont, String?>()
+        for (l in lines) for (c in l.chars) c.substitute = standard.getOrPut(c.font) {
+            val f = c.font
+            if (f.family.isEmpty() || f in cjk || PdfFont.installed(f.family) || f.family in STANDARD) null
+            else if (f.monospace) "Courier New" else if (f.serif) "Times New Roman" else "Arial"
+        }
     }
+
+    private val STANDARD = setOf("Arial", "Times New Roman", "Courier New")
 
     // ---- blocks and reading order ----------------------------------------------
 

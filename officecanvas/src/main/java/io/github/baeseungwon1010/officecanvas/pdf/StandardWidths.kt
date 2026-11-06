@@ -73,10 +73,11 @@ internal object StandardWidths {
         500, 500, 500, 350, 1000, 500, 1000, 500, 500, 1000, 333, 333, 944, 722, 556, 389, 611, 611, 389, 500, 333, 333, 556, 556
     )
 
-    /** The width of [text]'s first character in the [family] ("Arial" for Helvetica, "Times New Roman" for Times), or null. */
+    /** The width of [text]'s first character in the [family] ("Arial" for Helvetica, "Times New Roman" for Times, "Courier New"), or null. */
     fun width(family: String, bold: Boolean, italic: Boolean, text: String?): Double? {
         val i = text?.firstOrNull()?.let { index[it] } ?: return null
         val table = when (family) {
+            "Courier New" -> return 600.0
             "Arial" -> if (bold) HELVETICA_BOLD else HELVETICA
             "Times New Roman" -> when { bold && italic -> TIMES_BOLD_ITALIC; bold -> TIMES_BOLD; italic -> TIMES_ITALIC; else -> TIMES }
             else -> return null

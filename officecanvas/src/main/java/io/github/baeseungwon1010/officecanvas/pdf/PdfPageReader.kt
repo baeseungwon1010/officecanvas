@@ -17,6 +17,8 @@ internal class PdfChar(
 ) {
     /** The letter spacing the text is set with (points after each character), as the layout found it. */
     var tracking = 0.0
+    /** The standard face set in place of a font readers seldom have, as the layout chose it. */
+    var substitute: String? = null
 }
 
 /** A straight stroked line. */

@@ -115,6 +115,22 @@ internal class PdfFont private constructor(
             "jetbrainsmono" to "JetBrains Mono", "sfmono" to "SF Mono", "sfprotext" to "SF Pro Text", "sfprodisplay" to "SF Pro Display"
         )
 
+        /**
+         * Families most readers have: Windows' and Office's, and Korean ones (Hangul's, or with a Hangul
+         * name). Text in another font is set in a standard one fitted to its widths, which is closer
+         * than whatever a reader falls back on.
+         */
+        fun installed(family: String) = family.lowercase() in INSTALLED || family.any { it in '\uAC00'..'\uD7A3' } || family.startsWith("HY") ||
+            family.startsWith("Wingdings") || family.startsWith("Noto Sans CJK") || family.startsWith("Noto Serif CJK")
+
+        private val INSTALLED = setOf(
+            "arial", "arial black", "arial narrow", "times new roman", "courier new", "calibri", "calibri light", "cambria", "cambria math",
+            "candara", "consolas", "constantia", "corbel", "georgia", "verdana", "tahoma", "trebuchet ms", "segoe ui", "segoe ui symbol",
+            "comic sans ms", "impact", "palatino linotype", "book antiqua", "garamond", "century gothic", "century", "lucida console",
+            "lucida sans unicode", "symbol", "webdings", "aptos", "bahnschrift", "franklin gothic medium", "gill sans mt", "ms gothic", "ms mincho",
+            "malgun gothic", "gulim", "dotum", "batang", "gungsuh", "simsun", "simhei", "microsoft yahei", "meiryo", "yu gothic"
+        )
+
         /** A font's number in its file ("TT153F42o00" from Windows' printer driver, "F4", "C2_0"): no family at all. */
         private val NUMBERED = Regex("TT[0-9A-F]+o\\d+|[A-Z]{1,2}\\d{1,4}|C\\d+_\\d+")
 
