@@ -103,6 +103,21 @@ internal class PdfFont private constructor(
             listOf("cmr", "cmbx", "cmti", "cmsl", "cmcsc", "lmroman", "sfrm", "sfbx", "sfti") to "Times New Roman"
         )
 
+        /** Families whose names don't split at their capitals ("DejaVuSansMono"), longest first. */
+        private val NAMED = listOf(
+            "dejavusansmono" to "DejaVu Sans Mono", "dejavusanscondensed" to "DejaVu Sans Condensed", "dejavusans" to "DejaVu Sans",
+            "dejavuserifcondensed" to "DejaVu Serif Condensed", "dejavuserif" to "DejaVu Serif",
+            // TeX's Libertine and Biolinum ("LinLibertineT", "LinBiolinumTB"), as LibreOffice ships them.
+            "linlibertine" to "Linux Libertine G", "linuxlibertine" to "Linux Libertine G", "linbiolinum" to "Linux Biolinum G", "linuxbiolinum" to "Linux Biolinum G",
+            "notosanscjkjp" to "Noto Sans CJK JP", "notosanscjksc" to "Noto Sans CJK SC", "notosanscjktc" to "Noto Sans CJK TC",
+            "notoserifcjkjp" to "Noto Serif CJK JP", "notoserifcjksc" to "Noto Serif CJK SC", "notoserifcjktc" to "Noto Serif CJK TC",
+            "sourcecodepro" to "Source Code Pro", "sourcesanspro" to "Source Sans Pro", "sourceserifpro" to "Source Serif Pro",
+            "jetbrainsmono" to "JetBrains Mono", "sfmono" to "SF Mono", "sfprotext" to "SF Pro Text", "sfprodisplay" to "SF Pro Display"
+        )
+
+        /** A font's number in its file ("TT153F42o00" from Windows' printer driver, "F4", "C2_0"): no family at all. */
+        private val NUMBERED = Regex("TT[0-9A-F]+o\\d+|[A-Z]{1,2}\\d{1,4}|C\\d+_\\d+")
+
         /** PostScript names of Korean fonts and the names Word and Hangul know them by. */
         private val KOREAN = mapOf(
             "malgungothic" to "맑은 고딕", "malgun" to "맑은 고딕", "batang" to "바탕", "batangche" to "바탕체", "gulim" to "굴림",
@@ -111,7 +126,7 @@ internal class PdfFont private constructor(
             "nanummyeongjo" to "나눔명조", "nanumbarungothic" to "나눔바른고딕", "nanumsquare" to "나눔스퀘어", "applesdgothicneo" to "Apple SD Gothic Neo",
             "notosanscjkkr" to "Noto Sans CJK KR", "notosanskr" to "Noto Sans KR", "notoserifcjkkr" to "Noto Serif CJK KR",
             "hygothic" to "HY중고딕", "hygothicmedium" to "HY중고딕", "hysmyeongjo" to "HY신명조", "hysmyeongjomedium" to "HY신명조",
-            "hyheadline" to "HY헤드라인M", "hygraphic" to "HY그래픽", "pretendard" to "Pretendard", "spoqahansansneo" to "Spoqa Han Sans Neo"
+            "맑은고딕" to "맑은 고딕", "hyheadline" to "HY헤드라인M", "hygraphic" to "HY그래픽", "pretendard" to "Pretendard", "spoqahansansneo" to "Spoqa Han Sans Neo"
         )
 
         private val STYLE_WORDS = Regex("(?i)[-,_ ]?(bold|black|heavy|semibold|demibold|extrabold|ultrabold|medium|light|thin|regular|italic|oblique|roman|book|normal|condensed|narrow|mt|ps|psmt|it|bd|bdit|regu|medi|ital|reguital|mediital)$")
@@ -313,7 +328,8 @@ internal class PdfFont private constructor(
 
         private fun isBold(name: String, fd: PdfDict?): Boolean {
             val n = styleWords(name)
-            if (Regex("bold|black|heavy|semibold|demibold|extrabold|ultrabold|,bd|-bd").containsMatchIn(n)) return true
+            // TeX's names: "cmbx10", "LinLibertineTB".
+            if (Regex("bold|black|heavy|semibold|demibold|extrabold|ultrabold|,bd|-bd|^cmbx|^lin(libertine|biolinum)[a-z]*b").containsMatchIn(n)) return true
             val weight = fd?.num("FontWeight") ?: 0.0
             val flags = fd?.int("Flags") ?: 0
             return weight >= 600 || flags and (1 shl 18) != 0
@@ -334,7 +350,9 @@ internal class PdfFont private constructor(
 
         /** The family name a document would use for [baseName]. */
         fun familyOf(baseName: String): String {
-            var n = baseName.substringAfter('+')
+            // A CMap's name after the font's (Hangul's PDF export: "맑은고딕-WinCharSetFFFF-H").
+            var n = baseName.substringAfter('+').replace(Regex("-(WinCharSet\\w*|Identity|Uni[A-Z]\\w*|KSC\\w*)(-[HV])?$"), "")
+            if (NUMBERED.matches(n)) return ""
             repeat(3) { n = n.replace(STYLE_WORDS, "") }
             n = n.substringBefore(',').trim('-', ' ', '_')
             STANDARD[n]?.let { return it }
@@ -345,6 +363,7 @@ internal class PdfFont private constructor(
             // Metric clones (URW, TeX Gyre, GNU Free, Croscore) under the names
             // documents expect, and TeX's Computer and Latin Modern as the nearest of those.
             for ((prefixes, family) in CLONES) if (prefixes.any { key.startsWith(it) }) return family
+            NAMED.firstOrNull { key.startsWith(it.first) }?.let { return it.second }
             return when {
                 key.startsWith("arial") -> "Arial"
                 key.startsWith("timesnewroman") -> "Times New Roman"
