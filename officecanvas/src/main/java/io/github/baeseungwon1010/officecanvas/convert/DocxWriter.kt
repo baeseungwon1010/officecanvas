@@ -21,6 +21,8 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     private var pageIndex = 0
     private var section: ConvPage? = null
     private val types = HashSet<String>()
+    /** Fonts the runs use: fixed pitch, serif. */
+    private val fontKinds = LinkedHashMap<String, Pair<Boolean, Boolean>>()
     /** The header and footer (from the first page with them), and their distances from the page's edges. */
     private var header: List<ConvParagraph>? = null
     private var footer: List<ConvParagraph>? = null
@@ -72,13 +74,18 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
             .replace(HEADER_DISTANCE, tw(headerTop).toString()).replace(FOOTER_DISTANCE, tw(footerBottom).toString())
         put("word/document.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document $NS><w:body>$text</w:body></w:document>""")
         put("word/styles.xml", styles())
+        // Each font's family and pitch: a reader without the font substitutes one like it (a fixed-pitch one for code).
+        put("word/fontTable.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:fonts xmlns:w=\"$W\">" +
+            fontKinds.entries.joinToString("") { (name, kind) ->
+                "<w:font w:name=\"${esc(name)}\"><w:family w:val=\"${if (kind.first) "modern" else if (kind.second) "roman" else "swiss"}\"/><w:pitch w:val=\"${if (kind.first) "fixed" else "variable"}\"/></w:font>"
+            } + "</w:fonts>")
         put("word/settings.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="$W"><w:defaultTabStop w:val="720"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>""")
-        put("word/_rels/document.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>$rels</Relationships>""")
+        put("word/_rels/document.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rIdFonts" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>$rels</Relationships>""")
         put("_rels/.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""")
         val overrides = (if (header != null) "<Override PartName=\"/word/header1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/>" else "") +
             (if (footer != null) "<Override PartName=\"/word/footer1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml\"/>" else "")
         val defaults = types.joinToString("") { ext -> """<Default Extension="$ext" ContentType="image/${if (ext == "jpg") "jpeg" else ext}"/>""" }
-        put("[Content_Types].xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>$defaults<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>$overrides</Types>""")
+        put("[Content_Types].xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>$defaults<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>$overrides</Types>""")
         zip.finish()
         zip.flush()
     }
@@ -147,6 +154,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     }
 
     private fun rPr(r: ConvRun): String {
+        if (r.font.isNotBlank()) fontKinds.putIfAbsent(r.font, r.mono to r.serif)
         val f = esc(r.font.ifBlank { defaultFont })
         val sb = StringBuilder("<w:rFonts w:ascii=\"$f\" w:hAnsi=\"$f\" w:eastAsia=\"$f\" w:cs=\"$f\"/>")
         if (r.bold) sb.append("<w:b/><w:bCs/>")

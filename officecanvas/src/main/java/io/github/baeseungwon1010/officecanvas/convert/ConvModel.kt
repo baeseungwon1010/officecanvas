@@ -59,7 +59,10 @@ internal class ConvRun(
     val field: String? = null,
     /** Points added after each character (letter spacing), and the width in percent of the characters' own. */
     val spacing: Double = 0.0,
-    val scale: Int = 100
+    val scale: Int = 100,
+    /** What the font is like, for a reader without it to pick a like one. */
+    val mono: Boolean = false,
+    val serif: Boolean = false
 )
 
 internal class ConvBorder(val width: Double, val color: Int)

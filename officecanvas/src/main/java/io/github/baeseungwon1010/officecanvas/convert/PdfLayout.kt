@@ -205,7 +205,7 @@ internal object PdfLayout {
             for (m in Regex("\\d+").findAll(r.text)) {
                 if (m.value.toIntOrNull() != n) continue
                 if (m.range.first > last) runs += r.copyText(r.text.substring(last, m.range.first))
-                runs += ConvRun(m.value, r.font, r.size, r.bold, r.italic, r.underline, r.color, r.script, field = "PAGE", spacing = r.spacing, scale = r.scale)
+                runs += ConvRun(m.value, r.font, r.size, r.bold, r.italic, r.underline, r.color, r.script, field = "PAGE", spacing = r.spacing, scale = r.scale, mono = r.mono, serif = r.serif)
                 last = m.range.last + 1
             }
             runs += if (last == 0) r else r.copyText(r.text.substring(last))
@@ -423,7 +423,7 @@ internal object PdfLayout {
             // Sizes go in half points: the width they lose or gain is scaled back, with the PDF's own scaling.
             val scale = if (script != 0) 100 else Math.round(c.hScale * c.size / size * 100).toInt().coerceIn(50, 200)
             val s = ConvRun("", c.font.family, size, c.font.bold, c.font.italic || c.slanted, under, c.color and 0xFFFFFF or (0xFF shl 24), script,
-                spacing = Math.round(c.tracking * 20) / 20.0, scale = scale)
+                spacing = Math.round(c.tracking * 20) / 20.0, scale = scale, mono = c.font.monospace, serif = c.font.serif)
             val p = prev
             if (p != null && sb.isNotEmpty() && sb.last() != ' ') {
                 val gap = c.x - (p.x + p.width)
@@ -771,7 +771,7 @@ internal object PdfLayout {
         return runs.dropLast(1) + last.copyText(last.text.trimEnd())
     }
 
-    private fun ConvRun.copyText(t: String) = ConvRun(t, font, size, bold, italic, underline, color, script, field, spacing, scale)
+    private fun ConvRun.copyText(t: String) = ConvRun(t, font, size, bold, italic, underline, color, script, field, spacing, scale, mono, serif)
 
     // ---- tables -----------------------------------------------------------------
 
