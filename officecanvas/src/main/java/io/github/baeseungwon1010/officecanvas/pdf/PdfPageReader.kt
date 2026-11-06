@@ -12,7 +12,7 @@ internal class PdfChar(
     val font: PdfFont, val color: Int, val angle: Double, val invisible: Boolean, val isSpace: Boolean,
     /** Slanted by the text matrix (how some writers fake italics). */
     val slanted: Boolean = false,
-    /** The advance the font gives the glyph, without the spacing added to it, and the horizontal scaling (Tz). */
+    /** The advance the font gives the glyph, without the spacing added to it, and how much wider than tall the glyphs are drawn. */
     val glyphWidth: Double = width, val hScale: Double = 1.0
 ) {
     /** The letter spacing the text is set with (points after each character), as the layout found it. */
@@ -170,7 +170,8 @@ internal class PdfPageReader(private val doc: PdfDocument) {
                     // A slant: the glyph's upright leans over (in device space, y down).
                     val lean = if (Math.abs(trm.d) > 1e-9) -trm.c / Math.abs(trm.d) else 0.0
                     chars += PdfChar(text, ox, oy, adv * unitX, size, font, gs.fill, angle, gs.render == 3 || gs.render == 7, g.isSpace && text == " ", lean > 0.12 && Math.abs(angle) < 3,
-                        g.width * gs.size * gs.hScale * unitX, gs.hScale)
+                        // Width over height of the glyphs: Tz, or a text matrix squeezing them (Hangul's 장평).
+                        g.width * gs.size * gs.hScale * unitX, hypot(trm.a, trm.b) / size)
                 }
                 tm = Matrix(1.0, 0.0, 0.0, 1.0, adv, 0.0).times(tm)
             }
