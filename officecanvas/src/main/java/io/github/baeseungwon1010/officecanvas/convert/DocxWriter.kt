@@ -195,7 +195,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
             while (c < t.colWidths.size) {
                 val cell = owners[r to c]
                 if (cell == null) {
-                    body.append("<w:tc><w:tcPr><w:tcW w:w=\"${tw(t.colWidths[c])}\" w:type=\"dxa\"/></w:tcPr><w:p/></w:tc>")
+                    body.append("<w:tc><w:tcPr><w:tcW w:w=\"${tw(t.colWidths[c])}\" w:type=\"dxa\"/></w:tcPr>$EMPTY_CELL</w:tc>")
                     c++; continue
                 }
                 val width = t.colWidths.subList(c, minOf(c + cell.colSpan, t.colWidths.size)).sum()
@@ -213,7 +213,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
                         is ConvTable -> table(b)
                     }
                     if (cell.blocks.last() is ConvTable) body.append("<w:p/>")
-                } else body.append("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\"/></w:pPr></w:p>")
+                } else body.append(EMPTY_CELL)
                 body.append("</w:tc>")
                 c += cell.colSpan
             }
@@ -269,6 +269,8 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     }
 
     companion object {
+        /** An empty cell's paragraph, taking no height of its own (the row has its height; a default 10 pt line grew rows set smaller). */
+        const val EMPTY_CELL = "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/></w:rPr></w:pPr></w:p>"
         /** Stand-ins in section properties until the header and footer are known. */
         private const val SECT_REFS = "\u0000REFS\u0000"
         private const val HEADER_DISTANCE = "\u0000HDR\u0000"

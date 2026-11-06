@@ -167,6 +167,9 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
         body.append("</hp:run></hp:p>")
     }
 
+    /** A table in a cell starts no further left than the cell's text (LibreOffice's reader fails on one before it). */
+    private fun inCell(t: ConvTable) = if (t.x >= 0) t else ConvTable(0.0, t.colWidths, t.rowHeights, t.cells, t.spaceBefore)
+
     private fun table(t: ConvTable, into: StringBuilder) {
         val w = t.colWidths.sumOf { hu(it) }; val h = t.rowHeights.sumOf { hu(it) }
         val id = objectId++
@@ -184,12 +187,13 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
                 val v = when (c.vAlign) { 1 -> "CENTER"; 2 -> "BOTTOM"; else -> "TOP" }
                 into.append("<hp:tc name=\"\" header=\"0\" hasMargin=\"1\" protect=\"0\" editable=\"0\" dirty=\"0\" borderFillIDRef=\"$bf\">")
                 into.append("<hp:subList id=\"\" textDirection=\"HORIZONTAL\" lineWrap=\"BREAK\" vertAlign=\"$v\" linkListIDRef=\"0\" linkListNextIDRef=\"0\" textWidth=\"0\" textHeight=\"0\" hasTextRef=\"0\" hasNumRef=\"0\">")
-                if (c.blocks.isEmpty()) paragraph(ConvParagraph(emptyList()), into = into)
+                // An empty cell's paragraph takes no height of its own (the row has its height).
+                if (c.blocks.isEmpty()) paragraph(ConvParagraph(emptyList(), lineHeight = 1.0), into = into)
                 for (b in c.blocks) when (b) {
                     is ConvParagraph -> paragraph(b, into = into)
                     is ConvTable -> {
                         into.append("<hp:p id=\"0\" paraPrIDRef=\"0\" styleIDRef=\"0\" pageBreak=\"0\" columnBreak=\"0\" merged=\"0\"><hp:run charPrIDRef=\"0\">")
-                        table(b, into)
+                        table(inCell(b), into)
                         into.append("</hp:run></hp:p>")
                     }
                 }

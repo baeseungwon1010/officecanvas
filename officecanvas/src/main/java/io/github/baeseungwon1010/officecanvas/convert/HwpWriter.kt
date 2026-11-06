@@ -229,14 +229,19 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         for (row in 0 until rows) for (c in byRow[row].orEmpty().sortedBy { it.col }) {
             val cw = table.colWidths.subList(c.col, minOf(c.col + c.colSpan, table.colWidths.size)).sumOf { hu(it) }
             val ch = table.rowHeights.subList(c.row, minOf(c.row + c.rowSpan, rows)).sumOf { hu(it) }
-            val paras = c.blocks.filterIsInstance<ConvParagraph>().ifEmpty { listOf(ConvParagraph(emptyList())) }
+            // An empty cell's paragraph takes no height of its own (the row has its height).
+            val blocks = c.blocks.ifEmpty { listOf(ConvParagraph(emptyList(), lineHeight = 1.0)) }
             val lh = Bytes()
-            lh.u16(paras.size); lh.u16(0); lh.u32(when (c.vAlign) { 1 -> 32; 2 -> 64; else -> 0 })
+            lh.u16(blocks.size); lh.u16(0); lh.u32(when (c.vAlign) { 1 -> 32; 2 -> 64; else -> 0 })
             lh.u16(c.col); lh.u16(c.row); lh.u16(c.colSpan); lh.u16(c.rowSpan)
             lh.u32(cw.toInt()); lh.u32(ch.toInt()); lh.u16(141); lh.u16(141); lh.u16(0); lh.u16(0)
             lh.u16(borderFill(c.top, c.bottom, c.left, c.right, c.fill)); lh.u32(cw.toInt()); lh.zeros(9)
             r.add(LIST_HEADER, level + 1, lh.bytes())
-            for (p in paras) paragraph(r, level + 1, p)
+            for (b in blocks) when (b) {
+                is ConvParagraph -> paragraph(r, level + 1, b)
+                // (No further left than the cell's text, as Hangul's readers expect.)
+                is ConvTable -> tableParagraph(r, level + 1, if (b.x >= 0) b else ConvTable(0.0, b.colWidths, b.rowHeights, b.cells, b.spaceBefore))
+            }
         }
     }
 
