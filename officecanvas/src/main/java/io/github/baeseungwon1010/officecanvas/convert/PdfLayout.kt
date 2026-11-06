@@ -100,7 +100,13 @@ internal object PdfLayout {
         val tables = tables(rulings, lines, content)
         val inTable = HashSet<Line>()
         for (t in tables) for (n in t.nested()) inTable += n.lines
-        val bandLines = lines.filter { it !in inTable && isRepeated(it, h, repeated, pageNumber) }
+        val found = lines.filter { it !in inTable && isRepeated(it, h, repeated, pageNumber) }
+        // What stands on a header's or footer's baseline in its band is part of it (a title beside
+        // the page number: on a one-page document nothing repeats to find it by).
+        fun inBand(l: Line) = l.bottom < h * BAND || l.top > h * (1 - BAND)
+        val bandLines = found + lines.filter { l ->
+            l !in inTable && l !in found && inBand(l) && found.any { f -> abs(f.baseline - l.baseline) < f.size * 0.3 && l.size <= f.size * 1.3 }
+        }
         val free = lines.filter { it !in inTable && it !in bandLines }
         // Pictures: those the text runs over float behind it; the rest are in the flow.
         val floating = ArrayList<ConvImage>()
@@ -114,8 +120,10 @@ internal object PdfLayout {
             // Pictures laid over each other (a photo over another) can't both be in the flow.
             val overPicture = pictures.any { o -> o !== p && o.width * o.height <= w * h * 0.6 &&
                 min(o.x + o.width, p.x + p.width) - max(o.x, p.x) > 2 && min(o.y + o.height, p.y + p.height) - max(o.y, p.y) > 2 }
+            // In a cell too, a picture over its text (a seal over a signature) floats.
+            val overCellText = inCell != null && inCell.lines.any { l -> l.x0 < p.x + p.width && l.x1 > p.x && l.top < p.y + p.height && l.bottom > p.y }
             when {
-                p.floats || overPicture -> floating += p
+                p.floats || overPicture || overCellText -> floating += p
                 inCell != null -> inCell.pictures += p
                 overText || p.width * p.height > w * h * 0.6 -> floating += p
                 else -> flowPictures += p
