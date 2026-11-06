@@ -259,7 +259,7 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         pictures += (if (img.png) "png" else "jpg") to img.data
         val binId = pictures.size
         val w = hu(img.width); val h = hu(img.height)
-        r.add(CTRL_HEADER, level, if (floating) common("gso ", FLOAT_PICTURE_FLAGS, hu(img.y), hu(img.x), w, h) else common("gso ", PICTURE_FLAGS, 0, 0, w, h))
+        r.add(CTRL_HEADER, level, if (floating) common("gso ", FLOAT_PICTURE_FLAGS, hu(img.y).coerceAtLeast(0), hu(img.x).coerceAtLeast(0), w, h) else common("gso ", PICTURE_FLAGS, 0, 0, w, h))
         val sc = Bytes()
         sc.u32(chid("\$pic")); sc.u32(chid("\$pic")); sc.u32(0); sc.u32(0); sc.u16(0); sc.u16(1)
         sc.u32(w.toInt()); sc.u32(h.toInt()); sc.u32(w.toInt()); sc.u32(h.toInt()); sc.u32(0); sc.u16(0)

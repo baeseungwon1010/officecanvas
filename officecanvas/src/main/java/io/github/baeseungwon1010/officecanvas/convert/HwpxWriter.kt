@@ -215,8 +215,9 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
         imageItems.append("<opf:item id=\"$name\" href=\"BinData/$name.$ext\" media-type=\"image/${if (img.png) "png" else "jpg"}\" isEmbeded=\"1\"/>")
         val w = hu(img.width); val h = hu(img.height)
         val id = objectId++
+        // Off the paper's top or left edge LibreOffice's reader fails on the whole file, even at -1.
         val pos = if (floating)
-            "<hp:pos treatAsChar=\"0\" affectLSpacing=\"0\" flowWithText=\"0\" allowOverlap=\"1\" holdAnchorAndSO=\"0\" vertRelTo=\"PAPER\" horzRelTo=\"PAPER\" vertAlign=\"TOP\" horzAlign=\"LEFT\" vertOffset=\"${hu(img.y)}\" horzOffset=\"${hu(img.x)}\"/>"
+            "<hp:pos treatAsChar=\"0\" affectLSpacing=\"0\" flowWithText=\"0\" allowOverlap=\"1\" holdAnchorAndSO=\"0\" vertRelTo=\"PAPER\" horzRelTo=\"PAPER\" vertAlign=\"TOP\" horzAlign=\"LEFT\" vertOffset=\"${hu(img.y).coerceAtLeast(0)}\" horzOffset=\"${hu(img.x).coerceAtLeast(0)}\"/>"
         else "<hp:pos treatAsChar=\"1\" affectLSpacing=\"0\" flowWithText=\"1\" allowOverlap=\"0\" holdAnchorAndSO=\"0\" vertRelTo=\"PARA\" horzRelTo=\"COLUMN\" vertAlign=\"TOP\" horzAlign=\"LEFT\" vertOffset=\"0\" horzOffset=\"0\"/>"
         return "<hp:pic id=\"$id\" zOrder=\"${if (floating) 0 else id}\" numberingType=\"PICTURE\" textWrap=\"${if (floating) "BEHIND_TEXT" else "TOP_AND_BOTTOM"}\" textFlow=\"BOTH_SIDES\" lock=\"0\" dropcapstyle=\"None\" href=\"\" groupLevel=\"0\" instid=\"$id\" reverse=\"0\">" +
             "<hp:offset x=\"0\" y=\"0\"/><hp:orgSz width=\"$w\" height=\"$h\"/><hp:curSz width=\"$w\" height=\"$h\"/><hp:flip horizontal=\"0\" vertical=\"0\"/>" +
