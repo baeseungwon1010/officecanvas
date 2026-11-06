@@ -744,11 +744,11 @@ internal object PdfLayout {
             val lastBase = g.last().first().baseline
             val shade = fills.filter { f -> f.x <= textX0 + 1 && f.x + f.w >= textX1 - 1 && f.y <= first.baseline - first.size * 0.5 && f.y + f.h >= lastBase }
                 .minByOrNull { it.w * it.h }
-            // A shaded line on its own the usual pitch from the one before or after (a code listing's) is as
-            // tall as that pitch, not set apart by space before it, which the shading wouldn't fill.
+            // A shaded line on its own the usual pitch from the one before or after, on a band that tall (a code
+            // listing's), is as tall as that pitch, not set apart by space before it, which the shading wouldn't fill.
             val steps = listOfNotNull(prevBase?.let { first.baseline - it }, groups.getOrNull(gi + 1)?.let { it.first().first().baseline - g.last().first().baseline })
             val pitch = g.zipWithNext { a, b -> b.first().baseline - a.first().baseline }.filter { it > 0 }.sorted().let { it.getOrNull(it.size / 2) }
-                ?: typicalPitch?.takeIf { t -> shade != null && steps.any { abs(it - t) < t * 0.08 } && t < first.size * 2.5 }
+                ?: typicalPitch?.takeIf { t -> shade != null && shade.h > t * 0.9 && steps.any { abs(it - t) < t * 0.08 } && t < first.size * 2.5 }
             val box = lineBox(pitch, g.maxOf { r -> r.maxOf { it.size } })
             // The paragraph's box: its first baseline at 80 % of its first line box, its last 20 % above the bottom.
             val boxTop = first.baseline - box * 0.8
