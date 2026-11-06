@@ -88,27 +88,41 @@ internal class CfbWriter {
         // Unused directory slots are empty entries.
         for (i in nodes.size until dir.size / 128) emptyEntry().copyInto(dir, i * 128)
         val dirStart = place(dir)
-        // The FAT also lists its own sectors.
+        // The FAT also lists its own sectors, and the DIFAT's: the header names the
+        // first 109 FAT sectors, DIFAT sectors 127 more each (a file over about 7 MB).
         var fatSectors = 1
-        while ((sectors.size + fatSectors) > fatSectors * (SECTOR / 4)) fatSectors++
+        var difatSectors: Int
+        while (true) {
+            difatSectors = if (fatSectors > HEADER_FATS) (fatSectors - HEADER_FATS + 126) / 127 else 0
+            if (sectors.size + fatSectors + difatSectors <= fatSectors * (SECTOR / 4)) break
+            fatSectors++
+        }
         val fatStart = sectors.size
         repeat(fatSectors) { fat += FAT_SECTOR }
+        val difatStart = fatStart + fatSectors
+        repeat(difatSectors) { fat += DIFAT_SECTOR }
         val fatBytes = ints(fat, fatSectors * SECTOR / 4)
         for (k in 0 until fatSectors) sectors += fatBytes.copyOfRange(k * SECTOR, (k + 1) * SECTOR)
-        if (fatSectors > 109) throw IllegalStateException("document too large for this writer")
-        out.write(header(fatSectors, fatStart, dirStart, miniFatStart, (miniFat.size + SECTOR / 4 - 1) / (SECTOR / 4)))
+        for (k in 0 until difatSectors) {
+            val b = ByteBuffer.allocate(SECTOR).order(ByteOrder.LITTLE_ENDIAN)
+            for (j in 0 until 127) { val i = HEADER_FATS + k * 127 + j; b.putInt(if (i < fatSectors) fatStart + i else FREE) }
+            b.putInt(if (k < difatSectors - 1) difatStart + k + 1 else END)
+            sectors += b.array()
+        }
+        out.write(header(fatSectors, fatStart, dirStart, miniFatStart, (miniFat.size + SECTOR / 4 - 1) / (SECTOR / 4),
+            if (difatSectors > 0) difatStart else END, difatSectors))
         for (s in sectors) out.write(s)
         out.flush()
     }
 
-    private fun header(fatSectors: Int, fatStart: Int, dirStart: Int, miniFatStart: Int, miniFatSectors: Int): ByteArray {
+    private fun header(fatSectors: Int, fatStart: Int, dirStart: Int, miniFatStart: Int, miniFatSectors: Int, difatStart: Int, difatSectors: Int): ByteArray {
         val b = ByteBuffer.allocate(SECTOR).order(ByteOrder.LITTLE_ENDIAN)
         b.put(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte()))
         b.put(ByteArray(16))
         b.putShort(0x3E); b.putShort(3); b.putShort(0xFFFE.toShort()); b.putShort(9); b.putShort(6)
         b.put(ByteArray(6)); b.putInt(0); b.putInt(fatSectors); b.putInt(dirStart); b.putInt(0); b.putInt(CUTOFF)
-        b.putInt(miniFatStart); b.putInt(miniFatSectors); b.putInt(END); b.putInt(0)
-        for (k in 0 until 109) b.putInt(if (k < fatSectors) fatStart + k else FREE)
+        b.putInt(miniFatStart); b.putInt(miniFatSectors); b.putInt(difatStart); b.putInt(difatSectors)
+        for (k in 0 until HEADER_FATS) b.putInt(if (k < fatSectors) fatStart + k else FREE)
         return b.array()
     }
 
@@ -146,6 +160,8 @@ internal class CfbWriter {
         const val END = -2
         const val FREE = -1
         const val FAT_SECTOR = -3
+        const val DIFAT_SECTOR = -4
+        const val HEADER_FATS = 109
         const val NONE = -1
     }
 }
