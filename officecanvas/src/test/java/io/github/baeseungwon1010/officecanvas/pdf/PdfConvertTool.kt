@@ -4,13 +4,21 @@ import io.github.baeseungwon1010.officecanvas.ConvertFormat
 import io.github.baeseungwon1010.officecanvas.PdfConverter
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
  * Not a test: converts each PDF in -Pofficecanvas.input (a file or a directory)
  * to -Pofficecanvas.output/<name>.docx (or the -Pofficecanvas.format given, e.g.
- * hwpx), with the time each took in <output>/TIMES.
+ * hwpx), with the time each took in <output>/TIMES. Run with Android's graphics, as
+ * on a device: drawings and CMYK JPEG are drawn with them.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class PdfConvertTool {
 
     @Test
