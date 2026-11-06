@@ -40,6 +40,24 @@ internal object PdfImages {
         build(doc, PdfDict(full), dec.bytes, dec.imageCodec, null, fill, null)
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
+    /** Pixels a CMYK JPEG is decoded to at most (halving it until it fits): six megapixels, 24 MB. */
+    private const val MAX_RGB_PIXELS = 6_000_000L
+
+    /** A CMYK JPEG decoded and encoded again as RGB, or null where Android's decoder isn't there (a plain JVM) or fails. */
+    private fun rgbJpeg(data: ByteArray): Image? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+        var sample = 1
+        while (bounds.outWidth.toLong() * bounds.outHeight / (sample.toLong() * sample) > MAX_RGB_PIXELS) sample *= 2
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        if (bmp == null || bounds.outWidth <= 0) null else try {
+            val out = java.io.ByteArrayOutputStream()
+            if (bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)) Image(out.toByteArray(), false, bmp.width, bmp.height) else null
+        } finally {
+            bmp.recycle()
+        }
+    } catch (e: Exception) { null } catch (e: LinkageError) { null } catch (e: OutOfMemoryError) { null }
+
     /** How many color components a color space has. */
     fun colorComponents(doc: PdfDocument, cs: PdfObj?): Int? = when (val c = doc.resolve(cs)) {
         is PdfName -> when (c.name) { "DeviceGray", "CalGray", "G" -> 1; "DeviceRGB", "CalRGB", "RGB", "Lab" -> 3; "DeviceCMYK", "CMYK" -> 4; else -> null }
@@ -60,8 +78,15 @@ internal object PdfImages {
         val w = (doc.num(d["Width"]) ?: return null).toInt()
         val h = (doc.num(d["Height"]) ?: return null).toInt()
         if (w <= 0 || h <= 0) return null
-        // JPEG data is handed on as it is, so a large one costs only its bytes.
-        if (codec == "DCTDecode") return if (w.toLong() * h <= MAX_JPEG_PIXELS) Image(data, false, w, h) else null
+        // JPEG data is handed on as it is, so a large one costs only its bytes. A CMYK JPEG in
+        // Adobe's inverted coding (the PDF inverts it back with /Decode) is made RGB: LibreOffice
+        // draws it dark. Android's decoder always takes CMYK as inverted, so one that isn't stays.
+        if (codec == "DCTDecode") {
+            if (w.toLong() * h > MAX_JPEG_PIXELS) return null
+            val inverted = doc.array(d["Decode"])?.items?.map { doc.num(it) }?.let { it.size == 8 && (0 until 4).all { k -> it[2 * k] == 1.0 && it[2 * k + 1] == 0.0 } } == true
+            if (inverted && colorComponents(doc, d["ColorSpace"]) == 4) rgbJpeg(data)?.let { return it }
+            return Image(data, false, w, h)
+        }
         if (w.toLong() * h > MAX_PIXELS) return null
         if (codec != null) return null
         val mask = (doc.resolve(d["ImageMask"]) as? PdfBool)?.value == true
