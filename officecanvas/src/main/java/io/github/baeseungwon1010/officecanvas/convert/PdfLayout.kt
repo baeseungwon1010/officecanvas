@@ -1,6 +1,7 @@
 package io.github.baeseungwon1010.officecanvas.convert
 
 import io.github.baeseungwon1010.officecanvas.pdf.PdfChar
+import io.github.baeseungwon1010.officecanvas.pdf.PdfFont
 import io.github.baeseungwon1010.officecanvas.pdf.PdfPageContent
 import io.github.baeseungwon1010.officecanvas.pdf.PdfPicture
 import kotlin.math.abs
@@ -95,6 +96,7 @@ internal object PdfLayout {
         }
         val rulings = rulings(content, w, h)
         val lines = lines(dedupe(chars), rulings.filter { !it.horizontal })
+        tracking(lines)
         val tables = tables(rulings, lines, content)
         val inTable = HashSet<Line>()
         for (t in tables) for (n in t.nested()) inTable += n.lines
@@ -195,7 +197,7 @@ internal object PdfLayout {
             for (m in Regex("\\d+").findAll(r.text)) {
                 if (m.value.toIntOrNull() != n) continue
                 if (m.range.first > last) runs += r.copyText(r.text.substring(last, m.range.first))
-                runs += ConvRun(m.value, r.font, r.size, r.bold, r.italic, r.underline, r.color, r.script, field = "PAGE")
+                runs += ConvRun(m.value, r.font, r.size, r.bold, r.italic, r.underline, r.color, r.script, field = "PAGE", spacing = r.spacing, scale = r.scale)
                 last = m.range.last + 1
             }
             runs += if (last == 0) r else r.copyText(r.text.substring(last))
@@ -400,7 +402,7 @@ internal object PdfLayout {
         var prev: PdfChar? = null
         val sb = StringBuilder()
         var style: ConvRun? = null
-        fun flush() { style?.let { if (sb.isNotEmpty()) out += ConvRun(sb.toString(), it.font, it.size, it.bold, it.italic, it.underline, it.color, it.script) }; sb.clear() }
+        fun flush() { style?.let { if (sb.isNotEmpty()) out += it.copyText(sb.toString()) }; sb.clear() }
         for (c in line.chars) {
             if (c.isSpace || c.text.isBlank()) { if (sb.isNotEmpty() && sb.last() != ' ') sb.append(' '); prev = c; continue }
             val script = when {
@@ -410,7 +412,10 @@ internal object PdfLayout {
             }
             val under = underlines.any { u -> u.x0 <= c.x + c.width * 0.5 && u.x1 >= c.x + c.width * 0.5 }
             val size = if (script != 0) line.size else Math.round(c.size * 2) / 2.0
-            val s = ConvRun("", c.font.family, size, c.font.bold, c.font.italic || c.slanted, under, c.color and 0xFFFFFF or (0xFF shl 24), script)
+            // Sizes go in half points: the width they lose or gain is scaled back, with the PDF's own scaling.
+            val scale = if (script != 0) 100 else Math.round(c.hScale * c.size / size * 100).toInt().coerceIn(50, 200)
+            val s = ConvRun("", c.font.family, size, c.font.bold, c.font.italic || c.slanted, under, c.color and 0xFFFFFF or (0xFF shl 24), script,
+                spacing = Math.round(c.tracking * 20) / 20.0, scale = scale)
             val p = prev
             if (p != null && sb.isNotEmpty() && sb.last() != ' ') {
                 val gap = c.x - (p.x + p.width)
@@ -427,7 +432,25 @@ internal object PdfLayout {
     }
 
     private fun same(a: ConvRun, b: ConvRun) = a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
-        a.underline == b.underline && a.color == b.color && a.script == b.script
+        a.underline == b.underline && a.color == b.color && a.script == b.script && a.spacing == b.spacing && a.scale == b.scale
+
+    /**
+     * Letter spacing, per font and size on the page: how much further on than its width
+     * each character's neighbor starts, as the tighter lines have it (justified lines
+     * spread wider, kerned pairs come closer). Within a tenth of an em; more is a font
+     * whose widths are wrong, not spacing.
+     */
+    private fun tracking(lines: List<Line>) {
+        val gaps = HashMap<Pair<PdfFont, Long>, MutableList<Double>>()
+        for (l in lines) for (i in 0 until l.chars.size - 1) {
+            val a = l.chars[i]; val b = l.chars[i + 1]
+            if (a.isSpace || b.isSpace || a.text.isBlank() || b.text.isBlank() || a.font !== b.font || a.size != b.size || abs(a.angle) >= 3 || a.font.family.isEmpty()) continue
+            val d = (b.x - a.x - a.glyphWidth) / a.size
+            if (d > -0.3 && d < 0.3) gaps.getOrPut(a.font to Math.round(a.size * 100)) { ArrayList() } += d
+        }
+        val found = gaps.mapValues { (_, v) -> if (v.size < 20) 0.0 else v.sorted()[v.size / 4].takeIf { abs(it) in 0.01..0.1 } ?: 0.0 }
+        for (l in lines) for (c in l.chars) found[c.font to Math.round(c.size * 100)]?.let { c.tracking = it * c.size }
+    }
 
     // ---- blocks and reading order ----------------------------------------------
 
@@ -740,7 +763,7 @@ internal object PdfLayout {
         return runs.dropLast(1) + last.copyText(last.text.trimEnd())
     }
 
-    private fun ConvRun.copyText(t: String) = ConvRun(t, font, size, bold, italic, underline, color, script, field)
+    private fun ConvRun.copyText(t: String) = ConvRun(t, font, size, bold, italic, underline, color, script, field, spacing, scale)
 
     // ---- tables -----------------------------------------------------------------
 

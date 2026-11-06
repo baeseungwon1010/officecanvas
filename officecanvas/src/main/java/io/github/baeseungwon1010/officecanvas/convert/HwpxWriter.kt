@@ -146,7 +146,7 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
 
     private fun charPr(r: ConvRun): Int {
         val f = font(r.font)
-        val key = "$f|${(r.size * 100).roundToLong()}|${r.bold}|${r.italic}|${r.underline}|${r.color and 0xFFFFFF}|${r.script}"
+        val key = "$f|${(r.size * 100).roundToLong()}|${r.bold}|${r.italic}|${r.underline}|${r.color and 0xFFFFFF}|${r.script}|${spacingPercent(r)}|${r.scale}"
         return charPrs.getOrPut(key) { charPrs.size }
     }
 
@@ -290,9 +290,10 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
         sb.append("<hh:charProperties itemCnt=\"${charPrs.size}\">")
         for ((key, id) in charPrs) {
             val (f, height, bold, italic, under, color, script) = key.split('|')
+            val (spacing, ratio) = key.split('|').drop(7)
             val all = { v: String -> "hangul=\"$v\" latin=\"$v\" hanja=\"$v\" japanese=\"$v\" other=\"$v\" symbol=\"$v\" user=\"$v\"" }
             sb.append("<hh:charPr id=\"$id\" height=\"$height\" textColor=\"#${String.format("%06X", color.toInt())}\" shadeColor=\"none\" useFontSpace=\"0\" useKerning=\"0\" symMark=\"NONE\" borderFillIDRef=\"2\">")
-            sb.append("<hh:fontRef ${all(f)}/><hh:ratio ${all("100")}/><hh:spacing ${all("0")}/><hh:relSz ${all("100")}/><hh:offset ${all("0")}/>")
+            sb.append("<hh:fontRef ${all(f)}/><hh:ratio ${all(ratio)}/><hh:spacing ${all(spacing)}/><hh:relSz ${all("100")}/><hh:offset ${all("0")}/>")
             if (italic == "true") sb.append("<hh:italic/>")
             if (bold == "true") sb.append("<hh:bold/>")
             sb.append(if (under == "true") "<hh:underline type=\"BOTTOM\" shape=\"SOLID\" color=\"#${String.format("%06X", color.toInt())}\"/>" else "<hh:underline type=\"NONE\" shape=\"SOLID\" color=\"#000000\"/>")
@@ -338,6 +339,9 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
     private fun stored(name: String, data: ByteArray, compress: Boolean = true) = zip.add(name, data, compress)
 
     companion object {
+        /** Letter spacing as Hangul gives it: percent of the size, -50 to 50. */
+        fun spacingPercent(r: ConvRun) = if (r.size <= 0) 0 else Math.round(r.spacing / r.size * 100).toInt().coerceIn(-50, 50)
+
         private const val HEADER_CTRL = "\u0000DECOR\u0000"
         private const val HEADER_DISTANCE = "\u0000HDR\u0000"
         private const val FOOTER_DISTANCE = "\u0000FTR\u0000"

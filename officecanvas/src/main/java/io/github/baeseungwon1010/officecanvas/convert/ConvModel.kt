@@ -56,7 +56,10 @@ internal class ConvRun(
     /** 1 superscript, -1 subscript. */
     val script: Int = 0,
     /** A field standing for [text] ("PAGE": the page number). */
-    val field: String? = null
+    val field: String? = null,
+    /** Points added after each character (letter spacing), and the width in percent of the characters' own. */
+    val spacing: Double = 0.0,
+    val scale: Int = 100
 )
 
 internal class ConvBorder(val width: Double, val color: Int)

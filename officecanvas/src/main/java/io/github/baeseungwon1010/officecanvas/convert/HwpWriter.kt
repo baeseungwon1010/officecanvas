@@ -285,7 +285,7 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
     private fun font(name: String): Int = fonts.getOrPut(name.ifBlank { defaultFont }) { fonts.size }
 
     private fun charShape(r: ConvRun): Int {
-        val key = "${font(r.font)}|${hu(r.size)}|${r.bold}|${r.italic}|${r.underline}|${r.color and 0xFFFFFF}|${r.script}"
+        val key = "${font(r.font)}|${hu(r.size)}|${r.bold}|${r.italic}|${r.underline}|${r.color and 0xFFFFFF}|${r.script}|${HwpxWriter.spacingPercent(r)}|${r.scale}"
         return charShapes.getOrPut(key) { charShapes.size }
     }
 
@@ -341,8 +341,10 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
         }
         for (key in charShapes.keys) {
             val (f, size, bold, italic, under, color, script) = key.split('|')
+            val (spacing, ratio) = key.split('|').drop(7).map { it.toInt() }
             val b = Bytes()
-            repeat(7) { b.u16(f.toInt()) }; repeat(7) { b.u8(100) }; repeat(7) { b.u8(0) }; repeat(7) { b.u8(100) }; repeat(7) { b.u8(0) }
+            // Per language: font, width ratio, letter spacing (signed), relative size, offset.
+            repeat(7) { b.u16(f.toInt()) }; repeat(7) { b.u8(ratio) }; repeat(7) { b.u8(spacing) }; repeat(7) { b.u8(100) }; repeat(7) { b.u8(0) }
             b.u32(size.toInt())
             var flags = 0
             if (italic == "true") flags = flags or 1
