@@ -111,6 +111,7 @@ internal object PdfLayout {
         // Pictures: those the text runs over float behind it; the rest are in the flow.
         val floating = ArrayList<ConvImage>()
         val flowPictures = ArrayList<ConvImage>()
+        val placed = ArrayList<Pair<ConvImage, Any>>() // picture and where it goes: floating, flowPictures or a table
         for (p in pictures) {
             if (ocr && p.width * p.height > w * h * 0.5) continue
             val overText = free.any { l -> l.x0 < p.x + p.width && l.x1 > p.x && l.top < p.y + p.height && l.bottom > p.y } ||
@@ -122,12 +123,32 @@ internal object PdfLayout {
                 min(o.x + o.width, p.x + p.width) - max(o.x, p.x) > 2 && min(o.y + o.height, p.y + p.height) - max(o.y, p.y) > 2 }
             // In a cell too, a picture over its text (a seal over a signature) floats.
             val overCellText = inCell != null && inCell.lines.any { l -> l.x0 < p.x + p.width && l.x1 > p.x && l.top < p.y + p.height && l.bottom > p.y }
-            when {
-                p.floats || overPicture || overCellText -> floating += p
-                inCell != null -> inCell.pictures += p
-                overText || p.width * p.height > w * h * 0.6 -> floating += p
-                else -> flowPictures += p
+            placed += p to when {
+                p.floats || overPicture || overCellText -> floating
+                inCell != null -> inCell
+                overText || p.width * p.height > w * h * 0.6 -> floating
+                else -> flowPictures
             }
+        }
+        // Strips of one picture drawn edge to edge (a cover's background in 17 bands) float together
+        // if one must: one band floating behind a title and the rest in the flow split the picture.
+        if (placed.size in 2..2000) {
+            val parent = IntArray(placed.size) { it }
+            fun find(i: Int): Int { var x = i; while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x] }; return x }
+            fun touch(a: ConvImage, b: ConvImage): Boolean {
+                val ox = min(a.x + a.width, b.x + b.width) - max(a.x, b.x)
+                val oy = min(a.y + a.height, b.y + b.height) - max(a.y, b.y)
+                return ox > -1 && oy > -1 && (ox > min(a.width, b.width) * 0.5 || oy > min(a.height, b.height) * 0.5)
+            }
+            for (i in placed.indices) for (j in i + 1 until placed.size) if (touch(placed[i].first, placed[j].first)) parent[find(i)] = find(j)
+            val floats = placed.indices.filter { placed[it].second === floating }.map { find(it) }.toSet()
+            for (i in placed.indices) if (find(i) in floats) placed[i] = placed[i].first to floating
+        }
+        // (By identity: two empty lists are equal.)
+        for ((p, where) in placed) when {
+            where is TableGrid -> where.pictures += p
+            where === floating -> floating += p
+            else -> flowPictures += p
         }
         // Margins: where the content is, within reason.
         val boxes = free.map { doubleArrayOf(it.x0, it.top, it.x1, it.bottom) } + tables.map { doubleArrayOf(it.x0, it.y0, it.x1, it.y1) } +
