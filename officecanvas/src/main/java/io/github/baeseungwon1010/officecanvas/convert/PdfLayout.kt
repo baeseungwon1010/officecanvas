@@ -59,6 +59,9 @@ internal object PdfLayout {
                 l.top > h * (1 - BAND) -> "B:" + key(l)
                 else -> continue
             }
+            // Of lines alike (a page number, and a table's lone numbers), the outermost.
+            val had = out[k]
+            if (had != null && (if (k.startsWith("T:")) had.baseline <= l.baseline else had.baseline >= l.baseline)) continue
             out[k] = Band(l.baseline, Regex("\\d+").findAll(l.text).mapNotNull { it.value.take(6).toIntOrNull() }.toList())
         }
         return out
