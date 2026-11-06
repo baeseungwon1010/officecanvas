@@ -505,7 +505,14 @@ internal object PdfLayout {
                 // (raised or lowered pieces of a formula, smaller than the line, aren't labels).
                 val underRow = last.size > l.size * 0.8 &&
                     blocks.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
-                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !underRow) { target = b; break }
+                // Left-aligned text under centered lines (an author's name and address) starts another block: a line
+                // off the block's center, starting well left of it, or under lines centered on one another.
+                val bx0 = b.minOf { it.x0 }; val bx1 = b.maxOf { it.x1 }
+                val centers = b.map { (it.x0 + it.x1) / 2 }
+                val stacked = b.size >= 2 && centers.max() - centers.min() < l.size * 0.5 && b.maxOf { it.x0 } - bx0 > l.size
+                val offCenter = abs((l.x0 + l.x1) / 2 - (bx0 + bx1) / 2) > l.size
+                val outLeft = offCenter && (stacked || l.x0 < bx0 - l.size * 2)
+                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !underRow && !outLeft) { target = b; break }
                 if (l.top - b.last().bottom > l.size * 3) continue
             }
             if (target == null) blocks += mutableListOf(l) else target += l
@@ -566,8 +573,17 @@ internal object PdfLayout {
             val (t, b) = items.partition { it.y1 <= cut + 0.01 }
             if (t.isNotEmpty() && b.isNotEmpty()) return order(t, depth + 1) + order(b, depth + 1)
         }
-        // Neither cut: parts that only touch (a line running up to the next column) still stand side by side.
+        // Neither cut: parts that only touch (a line running up to the next column) still stand side by side,
+        // or else one above the other.
         if (best != null && best.second > -2.0) columns()?.let { return it }
+        var reachY = byY[0].y1
+        var touch: Pair<Int, Double>? = null
+        for (i in 1 until byY.size) {
+            val gap = byY[i].y0 - reachY
+            if (gap > -2.0 && (touch == null || gap > touch.second)) touch = i to gap
+            reachY = max(reachY, byY[i].y1)
+        }
+        if (touch != null) return order(byY.subList(0, touch.first), depth + 1) + order(byY.subList(touch.first, byY.size), depth + 1)
         return byY
     }
 
@@ -871,8 +887,8 @@ internal object PdfLayout {
     /**
      * Tables with no rules down and at most a rule or two across (one under the
      * heading): three or more columns of short pieces on shared baselines (two under
-     * a rule), three or more rows deep. A line on its own close under a row, not at the table's left,
-     * continues one of that row's cells.
+     * a rule), three or more rows deep. A line on its own close under a row continues one of that
+     * row's cells.
      */
     private fun streamTables(lines: List<Line>, hs: List<Ruling>, content: PdfPageContent): List<TableGrid> {
         fun ink(l: Line) = l.chars.filter { !it.isSpace && it.text.isNotBlank() }
@@ -895,7 +911,9 @@ internal object PdfLayout {
                 val em = max(prev[0].size, r[0].size)
                 val step = r[0].baseline - prev[0].baseline
                 if (step > em * 2.6) break
-                if (r.size < 2 && (step > em * 1.5 || inkX0(r[0]) < run[0].minOf { inkX0(it) } + em)) break
+                // A line on its own continues a cell: under the first column only if it ends before the second.
+                val underFirst = inkX1(r[0]) < run[0][1].x0 - em
+                if (r.size < 2 && (step > em * 1.5 || inkX0(r[0]) < run[0].minOf { inkX0(it) } + em && !underFirst)) break
                 // Running text ends it.
                 if (r.any { inkX1(it) - inkX0(it) > em * 18 } || run.size >= 200) break
                 run += r; j++
@@ -922,7 +940,7 @@ internal object PdfLayout {
         if (pieces.any { inkX1(it) - inkX0(it) > em * 18 }) return null
         if (pieces.sumOf { l -> l.chars.count { it.font.monospace } } * 2 > pieces.sumOf { it.chars.size }) return null
         val x0 = pieces.minOf { inkX0(it) }; val x1 = pieces.maxOf { inkX1(it) }
-        // Columns: where (almost) no row's text is, an em or more wide.
+        // Columns: where no row's text is, an em or more wide.
         val bins = ((x1 - x0) * 2).toInt().coerceIn(1, 20_000)
         val cover = IntArray(bins)
         for (r in multi) {
@@ -933,9 +951,9 @@ internal object PdfLayout {
         val seps = ArrayList<Double>()
         var b = 0
         while (b < bins) {
-            if (cover[b] <= multi.size / 5) {
+            if (cover[b] == 0) {
                 var e = b
-                while (e + 1 < bins && cover[e + 1] <= multi.size / 5) e++
+                while (e + 1 < bins && cover[e + 1] == 0) e++
                 // The boundary just before the next column's text, which then starts its cell.
                 if (b > 0 && e < bins - 1 && e - b >= em * 2) seps += x0 + (e + 1) / 2.0 - 2
                 b = e + 1
