@@ -412,7 +412,8 @@ internal object PdfLayout {
         var style: ConvRun? = null
         fun flush() { style?.let { if (sb.isNotEmpty()) out += it.copyText(sb.toString()) }; sb.clear() }
         for (c in line.chars) {
-            if (c.isSpace || c.text.isBlank()) { if (sb.isNotEmpty() && sb.last() != ' ') sb.append(' '); prev = c; continue }
+            // (Spaces in a monospaced line line things up: each one stays.)
+            if (c.isSpace || c.text.isBlank()) { if (sb.isNotEmpty() && (sb.last() != ' ' || c.font.monospace)) sb.append(' '); prev = c; continue }
             val script = when {
                 c.size < line.size * 0.85 && c.y < line.baseline - line.size * 0.15 -> 1
                 c.size < line.size * 0.85 && c.y > line.baseline + line.size * 0.08 -> -1
@@ -689,7 +690,8 @@ internal object PdfLayout {
         }
         val out = ArrayList<Pair<ConvParagraph, Pair<Double, Double>>>()
         var prevBottom: Double? = null
-        for (g in groups) {
+        var prevBase: Double? = null
+        for ((gi, g) in groups.withIndex()) {
             val runs = ArrayList<ConvRun>()
             val tabs = ArrayList<Double>()
             val rightTabs = ArrayList<Double>()
@@ -721,10 +723,12 @@ internal object PdfLayout {
             }
             val firstRow = g.first(); val first = firstRow.first()
             val others = g.drop(1)
-            val left = (if (others.isNotEmpty()) others.minOf { it.first().x0 } else first.x0) - colLeft
-            val firstLine = first.x0 - colLeft - left
+            // Where the text starts: spaces before it (code indented with them) are dropped, so they indent it.
+            fun start(l: Line) = l.chars.firstOrNull { !it.isSpace && it.text.isNotBlank() }?.x ?: l.x0
+            val left = (if (others.isNotEmpty()) others.minOf { start(it.first()) } else start(first)) - colLeft
+            val firstLine = start(first) - colLeft - left
             val rights = g.map { it.last().x1 }
-            val lefts = g.map { it.first().x0 }
+            val lefts = g.map { start(it.first()) }
             val colW = colRight - colLeft
             val center = (lefts.first() + rights.first()) / 2
             val align = when {
@@ -734,25 +738,31 @@ internal object PdfLayout {
                 g.size > 2 && rights.dropLast(1).let { rs -> rs.max() - rs.min() < first.size * 0.5 } -> ConvAlign.JUSTIFY
                 else -> ConvAlign.LEFT
             }
-            val pitch = g.zipWithNext { a, b -> b.first().baseline - a.first().baseline }.filter { it > 0 }.sorted().let { it.getOrNull(it.size / 2) }
-            val box = lineBox(pitch, g.maxOf { r -> r.maxOf { it.size } })
-            // The paragraph's box: its first baseline at 80 % of its first line box, its last 20 % above the bottom.
-            val boxTop = first.baseline - box * 0.8
-            val boxBottom = g.last().first().baseline + box * 0.2
-            val spaceBefore = prevBottom?.let { (boxTop - it).coerceAtLeast(0.0) } ?: 0.0
             // A fill behind the paragraph's text (a bar, a band) shades it.
             val textX0 = g.minOf { it.first().x0 }; val textX1 = g.maxOf { it.last().x1 }
             // (One box may hold several paragraphs: a code block, a note.)
             val lastBase = g.last().first().baseline
             val shade = fills.filter { f -> f.x <= textX0 + 1 && f.x + f.w >= textX1 - 1 && f.y <= first.baseline - first.size * 0.5 && f.y + f.h >= lastBase }
                 .minByOrNull { it.w * it.h }
+            // A shaded line on its own the usual pitch from the one before or after (a code listing's) is as
+            // tall as that pitch, not set apart by space before it, which the shading wouldn't fill.
+            val steps = listOfNotNull(prevBase?.let { first.baseline - it }, groups.getOrNull(gi + 1)?.let { it.first().first().baseline - g.last().first().baseline })
+            val pitch = g.zipWithNext { a, b -> b.first().baseline - a.first().baseline }.filter { it > 0 }.sorted().let { it.getOrNull(it.size / 2) }
+                ?: typicalPitch?.takeIf { t -> shade != null && steps.any { abs(it - t) < t * 0.08 } && t < first.size * 2.5 }
+            val box = lineBox(pitch, g.maxOf { r -> r.maxOf { it.size } })
+            // The paragraph's box: its first baseline at 80 % of its first line box, its last 20 % above the bottom.
+            val boxTop = first.baseline - box * 0.8
+            val boxBottom = g.last().first().baseline + box * 0.2
+            val spaceBefore = prevBottom?.let { (boxTop - it).coerceAtLeast(0.0) } ?: 0.0
+            // Shading starts at the indent: a shaded line indented in its box starts at the box, its text a first-line indent in.
+            val shadeLeft = shade?.let { it.x - colLeft }?.takeIf { g.size == 1 && it < left && align == ConvAlign.LEFT }
             val para = ConvParagraph(
                 runs.filter { it.text.isNotEmpty() }.let { trimEnd(it) },
                 align,
                 // A centered or right-aligned paragraph is placed by its alignment, not an indent.
-                leftIndent = if (align == ConvAlign.CENTER || align == ConvAlign.RIGHT) 0.0 else left.coerceAtLeast(-colLeft),
+                leftIndent = if (align == ConvAlign.CENTER || align == ConvAlign.RIGHT) 0.0 else (shadeLeft ?: left).coerceAtLeast(-colLeft),
                 rightIndent = if (align == ConvAlign.RIGHT) (colRight - rights.max()).coerceIn(0.0, colW * 0.5) else 0.0,
-                firstLine = if (align == ConvAlign.CENTER || align == ConvAlign.RIGHT) 0.0 else firstLine,
+                firstLine = if (align == ConvAlign.CENTER || align == ConvAlign.RIGHT) 0.0 else firstLine + (shadeLeft?.let { left - it.coerceAtLeast(-colLeft) } ?: 0.0),
                 spaceBefore = spaceBefore,
                 lineHeight = box,
                 tabs = tabs.map { Math.round(it * 2) / 2.0 }.distinct().sorted(),
@@ -761,6 +771,7 @@ internal object PdfLayout {
             )
             out += para to (boxTop to boxBottom)
             prevBottom = boxBottom
+            prevBase = g.last().first().baseline
         }
         return out
     }

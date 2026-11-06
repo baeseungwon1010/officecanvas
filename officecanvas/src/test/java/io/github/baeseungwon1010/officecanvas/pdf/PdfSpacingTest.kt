@@ -4,7 +4,6 @@ import io.github.baeseungwon1010.officecanvas.ConvertFormat
 import io.github.baeseungwon1010.officecanvas.PdfConverter
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -18,21 +17,7 @@ class PdfSpacingTest {
         text.append("90 Tz\n")
         repeat(2) { text.append("(Letters set closer and narrower than the font has them) '\n") }
         text.append("ET")
-        val objects = listOf(
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-            "<< /Length ${text.length} >>\nstream\n$text\nendstream",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
-        )
-        val out = ByteArrayOutputStream()
-        out.write("%PDF-1.7\n".toByteArray())
-        val offsets = objects.mapIndexed { i, o -> out.size().also { out.write("${i + 1} 0 obj\n$o\nendobj\n".toByteArray()) } }
-        val start = out.size()
-        out.write("xref\n0 ${objects.size + 1}\n0000000000 65535 f \n".toByteArray())
-        for (off in offsets) out.write(String.format("%010d 00000 n \n", off).toByteArray())
-        out.write("trailer\n<< /Size ${objects.size + 1} /Root 1 0 R >>\nstartxref\n$start\n%%EOF\n".toByteArray())
-        return File.createTempFile("spacing", ".pdf").apply { deleteOnExit(); writeBytes(out.toByteArray()) }
+        return TestPdf.page(text.toString(), mapOf("F1" to "Helvetica"))
     }
 
     private fun entry(file: File, name: String) = ZipFile(file).use { z -> String(z.getInputStream(z.getEntry(name)).readBytes()) }
