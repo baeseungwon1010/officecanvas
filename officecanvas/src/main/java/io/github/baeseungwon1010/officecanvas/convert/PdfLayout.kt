@@ -807,7 +807,11 @@ internal object PdfLayout {
         val hs = merge(rulings.filter { it.horizontal }, true)
         val vs = merge(rulings.filter { !it.horizontal }, false)
         if (hs.size + vs.size > 20_000) return emptyList()
-        if (vs.size < 2) return if (hs.size >= 3) openTables(hs, lines, content) else emptyList()
+        if (vs.size < 2) {
+            val open = if (hs.size >= 3) openTables(hs, lines, content) else emptyList()
+            val taken = open.flatMapTo(HashSet()) { it.lines }
+            return open + streamTables(lines.filter { it !in taken }, hs, content)
+        }
         // Union-find over crossings.
         val all = hs + vs
         val parent = IntArray(all.size) { it }
@@ -859,7 +863,114 @@ internal object PdfLayout {
         for (t in kept) kept.filter { o -> o !== t && o.encloses(t) }.minByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }?.children?.add(t)
         for (t in kept) t.children.retainAll { c -> c.nested().any { it.lines.isNotEmpty() } }
         val ruled = kept.filter { t -> t.nested().any { it.lines.isNotEmpty() } && kept.none { o -> o !== t && o.encloses(t) } }
-        return ruled + openTables(hs.filter { h -> ruled.none { t -> h.y0 >= t.y0 - 1 && h.y0 <= t.y1 + 1 && h.x0 >= t.x0 - 2 && h.x1 <= t.x1 + 2 } }, lines, content)
+        val found = ruled + openTables(hs.filter { h -> ruled.none { t -> h.y0 >= t.y0 - 1 && h.y0 <= t.y1 + 1 && h.x0 >= t.x0 - 2 && h.x1 <= t.x1 + 2 } }, lines, content)
+        val taken = HashSet<Line>().also { s -> for (t in found) for (n in t.nested()) s += n.lines }
+        return found + streamTables(lines.filter { it !in taken }, hs, content)
+    }
+
+    /**
+     * Tables with no rules down and at most a rule or two across (one under the
+     * heading): three or more columns of short pieces on shared baselines (two under
+     * a rule), three or more rows deep. A line on its own close under a row, not at the table's left,
+     * continues one of that row's cells.
+     */
+    private fun streamTables(lines: List<Line>, hs: List<Ruling>, content: PdfPageContent): List<TableGrid> {
+        fun ink(l: Line) = l.chars.filter { !it.isSpace && it.text.isNotBlank() }
+        fun inkX0(l: Line) = ink(l).minOfOrNull { it.x } ?: l.x0
+        fun inkX1(l: Line) = ink(l).maxOfOrNull { it.x + it.width } ?: l.x1
+        val rows = ArrayList<MutableList<Line>>()
+        for (l in lines.filter { l -> l.chars.all { abs(it.angle) < 3 } }.sortedBy { it.baseline }) {
+            val last = rows.lastOrNull()
+            if (last != null && abs(last[0].baseline - l.baseline) < min(last[0].size, l.size) * 0.3) last += l else rows += mutableListOf(l)
+        }
+        rows.forEach { r -> r.sortBy { it.x0 } }
+        val out = ArrayList<TableGrid>()
+        var i = 0
+        while (i < rows.size) {
+            if (rows[i].size < 2) { i++; continue }
+            val run = arrayListOf<List<Line>>(rows[i])
+            var j = i + 1
+            while (j < rows.size) {
+                val prev = run.last(); val r = rows[j]
+                val em = max(prev[0].size, r[0].size)
+                val step = r[0].baseline - prev[0].baseline
+                if (step > em * 2.6) break
+                if (r.size < 2 && (step > em * 1.5 || inkX0(r[0]) < run[0].minOf { inkX0(it) } + em)) break
+                // Running text ends it.
+                if (r.any { inkX1(it) - inkX0(it) > em * 18 } || run.size >= 200) break
+                run += r; j++
+            }
+            // The rows that follow may be something else: the longest run that is a table.
+            var end = run.size
+            var table: TableGrid? = null
+            while (end >= 3 && table == null) { table = streamTable(run.subList(0, end), hs, content, ::inkX0, ::inkX1); if (table == null) end-- }
+            if (table == null) { i++; continue }
+            out += table
+            i += end
+        }
+        return out
+    }
+
+    private val LIST_MARK = Regex("[\\p{So}\\p{Sm}\\p{Pd}\\p{Po}•◦▪▫■□●○◆◇►▶➢✓✔-]|\\(?[0-9A-Za-z가-힣]{1,3}[.)]")
+
+    private fun streamTable(run: List<List<Line>>, hs: List<Ruling>, content: PdfPageContent, inkX0: (Line) -> Double, inkX1: (Line) -> Double): TableGrid? {
+        val multi = run.filter { it.size >= 2 }
+        if (multi.size < 3) return null
+        val pieces = run.flatten()
+        val em = pieces.map { it.size }.sorted()[pieces.size / 2]
+        // Short pieces, not running text; and not a code listing.
+        if (pieces.any { inkX1(it) - inkX0(it) > em * 18 }) return null
+        if (pieces.sumOf { l -> l.chars.count { it.font.monospace } } * 2 > pieces.sumOf { it.chars.size }) return null
+        val x0 = pieces.minOf { inkX0(it) }; val x1 = pieces.maxOf { inkX1(it) }
+        // Columns: where (almost) no row's text is, an em or more wide.
+        val bins = ((x1 - x0) * 2).toInt().coerceIn(1, 20_000)
+        val cover = IntArray(bins)
+        for (r in multi) {
+            val hit = BooleanArray(bins)
+            for (l in r) for (b in ((inkX0(l) - x0) * 2).toInt().coerceIn(0, bins - 1)..((inkX1(l) - x0) * 2).toInt().coerceIn(0, bins - 1)) hit[b] = true
+            for (b in 0 until bins) if (hit[b]) cover[b]++
+        }
+        val seps = ArrayList<Double>()
+        var b = 0
+        while (b < bins) {
+            if (cover[b] <= multi.size / 5) {
+                var e = b
+                while (e + 1 < bins && cover[e + 1] <= multi.size / 5) e++
+                // The boundary just before the next column's text, which then starts its cell.
+                if (b > 0 && e < bins - 1 && e - b >= em * 2) seps += x0 + (e + 1) / 2.0 - 2
+                b = e + 1
+            } else b++
+        }
+        if (seps.isEmpty()) return null
+        val starts = listOf(x0 - 1) + seps
+        fun column(l: Line) = starts.indexOfLast { it <= (inkX0(l) + inkX1(l)) / 2 }
+        // No piece across a column boundary, and text in each column in most rows.
+        if (pieces.any { l -> seps.any { x -> inkX0(l) < x && inkX1(l) > x } }) return null
+        // Bullets or numbers before text are a list.
+        if (pieces.filter { column(it) == 0 }.all { LIST_MARK.matches(it.text.trim()) }) return null
+        if ((0..seps.size).any { c -> multi.count { r -> r.any { column(it) == c } } * 5 < multi.size * 3 }) return null
+        // Rows: each row of several pieces starts one; a line on its own continues it.
+        val bands = ArrayList<MutableList<Line>>()
+        for (r in run) if (r.size >= 2 || bands.isEmpty()) bands += r.toMutableList() else bands.last() += r
+        val tops = bands.map { r -> r.minOf { it.top } }; val bottoms = bands.map { r -> r.maxOf { it.bottom } }
+        val across = hs.filter { h -> min(h.x1, x1) - max(h.x0, x0) > (x1 - x0) * 0.5 }
+        fun rule(a: Double, b: Double) = across.filter { it.y0 in a..b }.minByOrNull { abs(it.y0 - (a + b) / 2) }
+        val used = ArrayList<Ruling>()
+        val ys = ArrayList<Double>()
+        ys += rule(tops[0] - em * 1.2, tops[0])?.also { used += it }?.y0 ?: (tops[0] - 2)
+        for (k in 1 until bands.size) ys += rule(bottoms[k - 1], tops[k])?.also { used += it }?.y0 ?: ((bottoms[k - 1] + tops[k]) / 2)
+        ys += rule(bottoms.last(), bottoms.last() + em * 1.2)?.also { used += it }?.y0 ?: (bottoms.last() + 2)
+        if (ys.zipWithNext().any { (a, c) -> c <= a }) return null
+        // Two columns only under a rule across them (pairs of words otherwise are often just text).
+        if (seps.size < 2 && used.isEmpty()) return null
+        val left = min(x0 - 2, used.minOfOrNull { it.x0 } ?: x0); val right = max(x1 + 2, used.maxOfOrNull { it.x1 } ?: x1)
+        val xs = listOf(left) + seps + listOf(right)
+        // Invisible boundaries everywhere, so no cells merge; the rules found are drawn.
+        val virtualH = ys.filter { y -> used.none { abs(it.y0 - y) < 0.5 } }.map { Ruling(left, it, right, it, 0.0, 0) }
+        val virtualV = seps.flatMap { x -> ys.zipWithNext().map { (a, c) -> Ruling(x, a, x, c, 0.0, 0) } }
+        val grid = TableGrid(xs, ys, used + virtualH, virtualV, content.rects)
+        grid.lines += pieces
+        return grid
     }
 
     /**

@@ -104,7 +104,7 @@ class FuzzTool {
         val keepDir = File("build/fuzz").apply { mkdirs() }
         val input = File.createTempFile("fuzz", ".pdf").apply { deleteOnExit() }
         val output = File.createTempFile("fuzz", ".out").apply { deleteOnExit() }
-        for (seed in listOf("pdf_samples/sample.pdf", "pdf_samples/features.pdf", "pdf_samples/sample_aes256.pdf", "pdf_samples/layout.pdf")) {
+        for (seed in listOf("pdf_samples/sample.pdf", "pdf_samples/features.pdf", "pdf_samples/sample_aes256.pdf", "pdf_samples/layout.pdf", "pdf_samples/tables.pdf")) {
             val src = res(seed)
             var worst = 0L
             repeat(runs!!) { k ->

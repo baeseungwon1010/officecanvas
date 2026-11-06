@@ -154,6 +154,35 @@ class PdfConverterTest {
     }
 
     @Test
+    fun `tables without rules down are tables, a list and pairs of words are not`() {
+        val out = File.createTempFile("conv", ".docx").apply { deleteOnExit() }
+        assertEquals(1, PdfConverter.convert(file("tables.pdf"), out, ConvertFormat.DOCX))
+        val doc = DocxParser.parse(out)
+        try {
+            // (A table of one row is how side-by-side columns are written.)
+            val tables = all(doc.pages[0].elements).filterIsInstance<HwpxElement.Table>().filter { it.rowHeightsHu.size > 1 }
+            fun cellTexts(t: HwpxElement.Table) = t.cells.map { row -> row.map { c -> c?.let { texts(it.elements).joinToString(" ").replace(Regex("\\s+"), " ").trim() } ?: "" } }
+            assertEquals(tables.map { cellTexts(it) }.toString(), 2, tables.size)
+            // Three columns, five rows: the wrapped cell stays in its row.
+            val three = cellTexts(tables.single { it.columnWidthsHu.size == 3 })
+            assertEquals(5, three.size)
+            assertEquals(listOf("Item", "Size", "Meaning"), three[0].filter { it.isNotEmpty() })
+            assertTrue(three.toString(), three[2].any { "set bits are known" in it && "(the rest unknown)" in it })
+            assertTrue(three.toString(), three[4].containsAll(listOf("ct", "2048 bit", "ciphertext")))
+            // The rule under the heading is the first row's bottom border.
+            val head = tables.single { it.columnWidthsHu.size == 3 }.cells[0].filterNotNull()
+            assertTrue(head.all { (it.borderFill?.bottom?.widthHu ?: 0) > 0 })
+            val two = cellTexts(tables.single { it.columnWidthsHu.size == 2 })
+            assertEquals(listOf("0110", "subtract"), two.last())
+            // The list and the pairs of words aren't tables of rows.
+            val lines = all(doc.pages[0].elements).filterIsInstance<HwpxElement.TextRun>().map { it.text }
+            assertTrue(lines.toString(), lines.any { "first point" in it } && lines.any { "Room" in it })
+        } finally {
+            doc.resources?.close()
+        }
+    }
+
+    @Test
     fun `an encrypted PDF converts like the plain one`() {
         val plain = DocxParser.parse(convert("sample.pdf", ConvertFormat.DOCX))
         val aes = DocxParser.parse(convert("sample_aes256.pdf", ConvertFormat.DOCX))

@@ -25,6 +25,7 @@ Every document under `officecanvas/src/test/resources` is generated, so the repo
 | `pdf_samples/sample.pdf`, `features.pdf` | LibreOffice's PDF export of the two Word samples | PDF reading and conversion: embedded subset fonts (Hangul through ToUnicode), headers and footers, a ruled table with merged and shaded cells, a shaded paragraph, a picture |
 | `pdf_samples/sample_aes256.pdf`, `sample_rc4.pdf`, `sample_locked.pdf` | `tools/make_pdf_fixtures.py` (PyMuPDF) | the same file encrypted with AES-256 and RC4 under an owner password only, and one that needs a password to open |
 | `pdf_samples/layout.pdf` | `tools/make_pdf_layout.py` (PyMuPDF) | what layout analysis finds hard: two justified columns sharing baselines across a 1.2 em gutter, three pictures in a row that touch, a soft shadow, a chart's empty grid with a legend, a right tab stop, all in standard 14 fonts without `/Widths` |
+| `pdf_samples/tables.pdf` | `tools/make_pdf_tables.py` (PyMuPDF) | tables with no rules down: three columns with a rule under the heading and a cell wrapped onto two lines, two columns under a rule; and a bulleted list ending at a rule, pairs of words with no rule, which stay text |
 | `emf_samples/shapes.emf` | LibreOffice export of an SVG from `tools/make_small_fixtures.py` | paths, polygons, pens and brushes |
 | `tiff_samples/*.tif` | `tools/make_small_fixtures.py` (Pillow) | the same image in each compression and color layout the decoder supports |
 
