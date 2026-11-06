@@ -59,9 +59,11 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         var ctm: Matrix = Matrix.IDENTITY, var fill: Int = BLACK, var stroke: Int = BLACK, var lineWidth: Double = 1.0,
         var font: PdfFont? = null, var size: Double = 0.0, var charSpacing: Double = 0.0, var wordSpacing: Double = 0.0,
         var hScale: Double = 1.0, var leading: Double = 0.0, var rise: Double = 0.0, var render: Int = 0,
-        var fillComponents: Int = 1, var strokeComponents: Int = 1
+        var fillComponents: Int = 1, var strokeComponents: Int = 1,
+        /** The clipping path's box in device space, if one was set; and the fill and stroke opacity. */
+        var clip: DoubleArray? = null, var fillAlpha: Double = 1.0, var strokeAlpha: Double = 1.0
     ) {
-        fun copy() = State(ctm, fill, stroke, lineWidth, font, size, charSpacing, wordSpacing, hScale, leading, rise, render, fillComponents, strokeComponents)
+        fun copy() = State(ctm, fill, stroke, lineWidth, font, size, charSpacing, wordSpacing, hScale, leading, rise, render, fillComponents, strokeComponents, clip, fillAlpha, strokeAlpha)
     }
 
     private lateinit var device: Matrix
@@ -69,6 +71,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
     private val lines = ArrayList<PdfLine>()
     private val rects = ArrayList<PdfRect>()
     private val pictures = ArrayList<PdfPicture>()
+    private val shapes = ArrayList<PdfShape>()
     private var ops = 0L
 
     fun read(page: PdfDocument.Page): PdfPageContent {
@@ -83,11 +86,13 @@ internal class PdfPageReader(private val doc: PdfDocument) {
             else -> flip
         }
         val (pw, ph) = if (page.rotate == 90 || page.rotate == 270) h to w else w to h
-        chars.clear(); lines.clear(); rects.clear(); pictures.clear(); ops = 0
+        chars.clear(); lines.clear(); rects.clear(); pictures.clear(); shapes.clear(); ops = 0
         val content = contentBytes(page.dict["Contents"])
         if (content != null) run(content, page.resources, State(), 0)
         annotations(page)
-        return PdfPageContent(pw, ph, chars.toList(), lines.toList(), rects.toList(), pictures.toList())
+        // Drawings (curves, slanted lines, shapes) as pictures, under the page's own.
+        val art = PdfArt.pictures(shapes.toList(), pw, ph)
+        return PdfPageContent(pw, ph, chars.toList(), lines.toList(), rects.toList(), art + pictures)
     }
 
     /** Annotations' normal appearances (stamps, filled-in form fields, signatures), mapped into their rectangles (12.5.5). */
@@ -146,6 +151,17 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         val path = ArrayList<MutableList<DoubleArray>>()
         val pathRects = ArrayList<DoubleArray>()
         var cur: MutableList<DoubleArray>? = null
+        // A W or W* waiting for the path's painting operator, after which it clips.
+        var pendingClip = false
+        fun applyClip() {
+            if (!pendingClip) return
+            pendingClip = false
+            val xs = path.flatMap { sp -> sp.map { it[0] } } + pathRects.flatMap { listOf(it[0], it[0] + it[2]) }
+            val ys = path.flatMap { sp -> sp.map { it[1] } } + pathRects.flatMap { listOf(it[1], it[1] + it[3]) }
+            if (xs.isEmpty()) return
+            val box = doubleArrayOf(xs.min(), ys.min(), xs.max(), ys.max())
+            gs.clip = gs.clip?.let { c -> doubleArrayOf(maxOf(c[0], box[0]), maxOf(c[1], box[1]), minOf(c[2], box[2]), minOf(c[3], box[3])) } ?: box
+        }
         // ActualText spans replacing the glyphs inside them.
         val actual = ArrayList<String?>()
         var actualUsed = false
@@ -179,9 +195,14 @@ internal class PdfPageReader(private val doc: PdfDocument) {
             }
         }
 
-        fun paint(stroke: Boolean, fill: Boolean) {
+        fun paint(stroke: Boolean, fill: Boolean, evenOdd: Boolean = false) {
             val m = gs.ctm.times(device)
             val lw = (gs.lineWidth * hypot(m.a, m.b)).coerceAtLeast(0.1)
+            if (shapes.size < MAX_SHAPES && (path.isNotEmpty() || pathRects.isNotEmpty())) {
+                val f = if (fill && gs.fillComponents != 0 && gs.fillAlpha > 0.05) gs.fill else null
+                val st = if (stroke && gs.strokeComponents != 0 && gs.strokeAlpha > 0.05) gs.stroke else null
+                if (f != null || st != null) shapes += PdfShape(path.map { it.toList() }, pathRects.toList(), f, st, lw, evenOdd, gs.clip, gs.fillAlpha, gs.strokeAlpha)
+            }
             if (fill) for (r in pathRects) {
                 if (rects.size < MAX_SHAPES) rects += PdfRect(r[0], r[1], r[2], r[3], gs.fill)
             }
@@ -203,6 +224,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
                     if (axis && onEdge && x1 - x0 > 0.1 && y1 - y0 > 0.1 && rects.size < MAX_SHAPES) rects += PdfRect(x0, y0, x1 - x0, y1 - y0, gs.fill)
                 }
             }
+            applyClip()
             path.clear(); pathRects.clear(); cur = null
         }
 
@@ -224,7 +246,11 @@ internal class PdfPageReader(private val doc: PdfDocument) {
                 "w" -> gs.lineWidth = num(0)
                 "gs" -> {
                     val ext = doc.dict(doc.dict(resources?.get("ExtGState"))?.get((operands.lastOrNull() as? PdfName)?.name ?: ""))
-                    ext?.let { e -> doc.num(e["LW"])?.let { gs.lineWidth = it } }
+                    ext?.let { e ->
+                        doc.num(e["LW"])?.let { gs.lineWidth = it }
+                        doc.num(e["ca"])?.let { gs.fillAlpha = it.coerceIn(0.0, 1.0) }
+                        doc.num(e["CA"])?.let { gs.strokeAlpha = it.coerceIn(0.0, 1.0) }
+                    }
                 }
                 // Colors.
                 "g" -> { gs.fill = gray(num(0)); gs.fillComponents = 1 }
@@ -240,17 +266,24 @@ internal class PdfPageReader(private val doc: PdfDocument) {
                 // Paths.
                 "m" -> { cur = mutableListOf(pt(num(0), num(1))); path += cur!! }
                 "l" -> cur?.add(pt(num(0), num(1)))
-                "c" -> cur?.add(pt(num(4), num(5)).curve())
-                "v", "y" -> cur?.add(pt(num(2), num(3)).curve())
-                "h" -> cur?.let { sp -> if (sp.size > 1) sp.add(sp[0].copyOf()) }
+                // Curves keep their control points after the end point: (x, y, c1x, c1y, c2x, c2y).
+                "c" -> cur?.add(pt(num(4), num(5)) + pt(num(0), num(1)) + pt(num(2), num(3)))
+                "v" -> cur?.let { sp -> val p0 = sp.last(); sp.add(pt(num(2), num(3)) + doubleArrayOf(p0[0], p0[1]) + pt(num(0), num(1))) }
+                "y" -> cur?.let { sp -> val e = pt(num(2), num(3)); sp.add(e + pt(num(0), num(1)) + e) }
+                "h" -> cur?.let { sp -> if (sp.size > 1) sp.add(sp[0].copyOf(2)) }
                 "re" -> {
                     val p0 = pt(num(0), num(1)); val p1 = pt(num(0) + num(2), num(1) + num(3))
                     pathRects += doubleArrayOf(minOf(p0[0], p1[0]), minOf(p0[1], p1[1]), Math.abs(p1[0] - p0[0]), Math.abs(p1[1] - p0[1]))
                 }
-                "S", "s" -> paint(stroke = true, fill = false)
-                "f", "F", "f*" -> paint(stroke = false, fill = true)
-                "B", "B*", "b", "b*" -> paint(stroke = true, fill = true)
-                "n" -> { path.clear(); pathRects.clear(); cur = null }
+                "S" -> paint(stroke = true, fill = false)
+                "s" -> { cur?.let { sp -> if (sp.size > 1) sp.add(sp[0].copyOf(2)) }; paint(stroke = true, fill = false) }
+                "f", "F" -> paint(stroke = false, fill = true)
+                "f*" -> paint(stroke = false, fill = true, evenOdd = true)
+                "B" -> paint(stroke = true, fill = true)
+                "B*" -> paint(stroke = true, fill = true, evenOdd = true)
+                "b", "b*" -> { cur?.let { sp -> if (sp.size > 1) sp.add(sp[0].copyOf(2)) }; paint(stroke = true, fill = true, evenOdd = o.word == "b*") }
+                "W", "W*" -> pendingClip = true
+                "n" -> { applyClip(); path.clear(); pathRects.clear(); cur = null }
                 // Text.
                 "BT" -> { tm = Matrix.IDENTITY; tlm = Matrix.IDENTITY }
                 "ET" -> {}
@@ -319,7 +352,6 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         }
     }
 
-    private fun DoubleArray.curve(): DoubleArray = doubleArrayOf(this[0], this[1], 1.0)
     private fun DoubleArray.isCurve() = size > 2
 
     private fun components(cs: PdfObj?, resources: PdfDict?): Int {
