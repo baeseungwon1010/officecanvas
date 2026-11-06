@@ -126,7 +126,9 @@ internal class PdfFont private constructor(
             "nanummyeongjo" to "나눔명조", "nanumbarungothic" to "나눔바른고딕", "nanumsquare" to "나눔스퀘어", "applesdgothicneo" to "Apple SD Gothic Neo",
             "notosanscjkkr" to "Noto Sans CJK KR", "notosanskr" to "Noto Sans KR", "notoserifcjkkr" to "Noto Serif CJK KR",
             "hygothic" to "HY중고딕", "hygothicmedium" to "HY중고딕", "hysmyeongjo" to "HY신명조", "hysmyeongjomedium" to "HY신명조",
-            "맑은고딕" to "맑은 고딕", "hyheadline" to "HY헤드라인M", "hygraphic" to "HY그래픽", "pretendard" to "Pretendard", "spoqahansansneo" to "Spoqa Han Sans Neo"
+            "맑은고딕" to "맑은 고딕", "hyheadline" to "HY헤드라인M",
+            // Hancom's own PostScript names.
+            "h2hdrm" to "HY헤드라인M", "h2gtrm" to "HY중고딕", "h2gtre" to "HY견고딕", "h2mjre" to "HY견명조", "hygraphic" to "HY그래픽", "pretendard" to "Pretendard", "spoqahansansneo" to "Spoqa Han Sans Neo"
         )
 
         private val STYLE_WORDS = Regex("(?i)[-,_ ]?(bold|black|heavy|semibold|demibold|extrabold|ultrabold|medium|light|thin|regular|italic|oblique|roman|book|normal|condensed|narrow|mt|ps|psmt|it|bd|bdit|regu|medi|ital|reguital|mediital)$")
@@ -342,7 +344,7 @@ internal class PdfFont private constructor(
             return flags and 64 != 0 || (fd?.num("ItalicAngle") ?: 0.0).let { it < -5 }
         }
 
-        private fun isMono(name: String, fd: PdfDict?) = (fd?.int("Flags") ?: 0) and 1 != 0 || Regex("(?i)courier|mono|consolas|code").containsMatchIn(name)
+        private fun isMono(name: String, fd: PdfDict?) = (fd?.int("Flags") ?: 0) and 1 != 0 || Regex("(?i)courier|mono|consolas|code|coding|menlo|monaco|inconsolata|cascadia").containsMatchIn(name)
 
         private fun isSerif(name: String, fd: PdfDict?) = (fd?.int("Flags") ?: 0) and 2 != 0 ||
             Regex("(?i)times|serif|georgia|garamond|cambria|batang|myeongjo|mincho|song|minion|palatino|bookman|century").containsMatchIn(name) &&

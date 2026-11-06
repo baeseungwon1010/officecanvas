@@ -108,7 +108,8 @@ object PdfConverter {
                     margins += PdfLayout.margins(c, repeated, i + 1, decorations)
                     for (ch in c.chars) if (ch.text.isNotBlank()) {
                         fonts.merge(ch.font.family, 1, Int::plus)
-                        if (ch.text[0] in '\uAC00'..'\uD7A3') hangul++ else latin++
+                        // (Digits and signs are in every script's fonts: letters decide.)
+                        if (ch.text[0] in '\uAC00'..'\uD7A3') hangul++ else if (ch.text[0].isLetter()) latin++
                         if (ch.font.family.isEmpty()) { if (ch.font.serif) serif++ else sans++ }
                     }
                 }
@@ -126,7 +127,9 @@ object PdfConverter {
                 for (m in shared.values) m[3] = m[3] * 0.4
                 // (Type 3 fonts and fonts named by number have no name to give: a Korean or Latin
                 // default then, with serifs if theirs have them.)
-                val font = fonts.filterKeys { it.isNotBlank() }.maxByOrNull { it.value }?.key ?: when {
+                // A named font sets the rest only if it sets a good part of the text (not a title's alone).
+                val total = fonts.values.sum()
+                val font = fonts.filterKeys { it.isNotBlank() }.maxByOrNull { it.value }?.takeIf { it.value * 4 >= total }?.key ?: when {
                     hangul > latin -> if (serif > sans) "바탕" else "맑은 고딕"
                     else -> if (serif > sans) "Times New Roman" else "Arial"
                 }
