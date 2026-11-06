@@ -291,25 +291,24 @@ internal object PdfLayout {
             if (groups.size > 20_000) break
         }
         // Column gutters can be narrower than the gap that splits a line: a gap splits
-        // it too where the lines around it leave the same place empty, with lines on both sides.
+        // it too where the lines around it, with text on both sides, leave the same place empty.
         val ink = groups.map { m -> m.filter { !it.isSpace && it.text.isNotBlank() }.sortedBy { it.x } }
         val byY = groups.indices.sortedBy { baselines[it] }
         val rank = IntArray(groups.size).also { r -> byY.forEachIndexed { i, g -> r[g] = i } }
         fun gutter(g: Int, m: Double, em: Double): Boolean {
-            // Lines on each side, counted outward each way up to the first line with ink
-            // there (a heading across both columns ends them).
-            var left = 0; var right = 0
+            // Lines with ink on both sides and none there, counted outward each way up to
+            // the first line with ink there (a heading across both columns ends them).
+            var both = 0
             for (dir in intArrayOf(-1, 1)) {
                 var i = rank[g] + dir
                 while (i in byY.indices && abs(baselines[byY[i]] - baselines[g]) < em * 6) {
                     val row = ink[byY[i]]
                     i += dir
                     if (row.any { it.x < m + em * 0.15 && it.x + it.width > m - em * 0.15 }) break
-                    if (row.any { it.x + it.width <= m }) left++
-                    if (row.any { it.x >= m }) right++
+                    if (row.any { it.x + it.width <= m } && row.any { it.x >= m }) both++
                 }
             }
-            return left >= 2 && right >= 2
+            return both >= 2
         }
         for ((g, members) in groups.withIndex()) {
             val sorted = members.sortedBy { it.x }
@@ -462,9 +461,10 @@ internal object PdfLayout {
         // still half an em wide, with lines on both sides.
         fun gutter(l: Line, a: Double, b: Double): Boolean {
             val i0 = rank.getValue(l)
-            var lo = a; var hi = b
-            var left = 0; var right = 0
-            for (dir in intArrayOf(-1, 1)) {
+            // Each way on its own (a title above both columns narrows nothing below).
+            return intArrayOf(-1, 1).any { dir ->
+                var lo = a; var hi = b
+                var left = 0; var right = 0
                 var i = i0 + dir
                 while (i in byY.indices && abs(byY[i].baseline - l.baseline) < l.size * 6) {
                     val o = byY[i]
@@ -477,8 +477,8 @@ internal object PdfLayout {
                         else -> break
                     }
                 }
+                hi - lo > l.size * 0.5 && left >= 2 && right >= 2
             }
-            return hi - lo > l.size * 0.5 && left >= 2 && right >= 2
         }
         for (l in lines.sortedWith(compareBy<Line> { it.baseline }.thenBy { it.x0 })) {
             var target: MutableList<Line>? = null
@@ -496,7 +496,7 @@ internal object PdfLayout {
                     abs(o.baseline - l.baseline) < o.size * 0.3 && o.x1 <= l.x0 + o.size && run {
                         val far = l.x0 - o.x1 >= max(o.size, l.size) * 6
                         (!far || o.x1 - o.x0 < o.size * 15 || l.x1 > textRight - l.size) &&
-                            !((far || max(l.x1 - l.x0, o.x1 - o.x0) > l.size * 15) && o.x1 - o.x0 > o.size * 4 && gutter(l, o.x1, l.x0))
+                            !((far || max(l.x1 - l.x0, o.x1 - o.x0) > l.size * 15 && o.x1 - o.x0 > o.size * 4) && gutter(l, o.x1, l.x0))
                     }
                 }
                 if (sameRow) { target = b; break }
