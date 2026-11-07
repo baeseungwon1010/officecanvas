@@ -14,6 +14,9 @@ import android.text.TextPaint
 import io.github.baeseungwon1010.officecanvas.metafile.EmfRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.SvgRenderer
 import io.github.baeseungwon1010.officecanvas.metafile.WmfRenderer
+import io.github.baeseungwon1010.officecanvas.util.DeviceScale
+import io.github.baeseungwon1010.officecanvas.util.PageSource
+import io.github.baeseungwon1010.officecanvas.util.PictureCache
 import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import io.github.baeseungwon1010.officecanvas.util.readCapped
 import java.io.File
@@ -54,56 +57,130 @@ internal object SlideRenderer {
      * at a time — this keeps that same shape for pptx.
      */
     fun render(deck: Deck, pptxFile: File, targetLongSidePx: Int, onSlide: (index: Int, bitmap: Bitmap) -> Unit) {
-        val scale = if (deck.aspect >= 1.0) {
-            targetLongSidePx.toDouble() / deck.widthEmu
-        } else {
-            targetLongSidePx.toDouble() / deck.heightEmu
+        Pages(deck, pptxFile, PageSource.RENDER_CACHE_BYTES).use { pages ->
+            for (i in 0 until pages.pageCount) onSlide(i, pages.render(i, targetLongSidePx))
         }
-        val pxW = (deck.widthEmu * scale).toInt().coerceAtLeast(1)
-        val pxH = (deck.heightEmu * scale).toInt().coerceAtLeast(1)
+    }
 
+    /**
+     * A deck opened for drawing. Slides are drawn in reference pixels (the slide's
+     * long side [PageSource.REF_LONG_SIDE_PX] px), whatever the size they end up:
+     * text is laid out and measured there, so lines break and boxes shrink the same
+     * in a whole-slide image and in a corner of it drawn at 20x, and the canvas
+     * matrix takes the drawing to its real size.
+     *
+     * Holds the zip the pictures come from, decoded pictures, and the text laid out
+     * for the slide drawn last. One thread at a time.
+     */
+    class Pages(private val deck: Deck, file: File, cacheBytes: Long) : PageSource {
         // Opened defensively rather than unconditionally: this renderer also draws
         // decks produced by PptParser from a legacy binary .ppt (an OLE2 file, not
         // a zip at all — see ppt/PptParser), which never has pictures to
         // look up here, so failing to open it as a zip should not fail the render.
-        val zip = try { ZipFile(pptxFile) } catch (e: Exception) { null }
-        try {
-            deck.slides.forEachIndexed { index, slide ->
-                onSlide(index, renderSlide(slide, zip, scale, pxW, pxH))
+        internal val zip: ZipFile? = try { ZipFile(file) } catch (e: Exception) { null }
+        internal val pictures = PictureCache(cacheBytes)
+        internal val texts = HashMap<TextKey, Any>()
+        private var textsFor = -1
+        /** Output px per reference px while rendering, for [debugBaselines]. */
+        internal var debugScale = 1f
+
+        private val scale = PageSource.REF_LONG_SIDE_PX.toDouble() / maxOf(deck.widthEmu, deck.heightEmu).coerceAtLeast(1)
+
+        override val pageCount get() = deck.slides.size
+        override fun widthPt(index: Int) = deck.widthEmu / EMU_PER_POINT
+        override fun heightPt(index: Int) = deck.heightEmu / EMU_PER_POINT
+        override fun refPxPerPt(index: Int) = scale * EMU_PER_POINT
+
+        override fun renderSize(index: Int, longSidePx: Int): Pair<Int, Int> {
+            val s = if (deck.aspect >= 1.0) longSidePx.toDouble() / deck.widthEmu else longSidePx.toDouble() / deck.heightEmu
+            return (deck.widthEmu * s).toInt().coerceAtLeast(1) to (deck.heightEmu * s).toInt().coerceAtLeast(1)
+        }
+
+        override fun drawRef(canvas: Canvas, index: Int) {
+            val slide = deck.slides[index]
+            if (index != textsFor) { texts.clear(); textsFor = index }
+            canvas.save()
+            try {
+                val page = RectF(0f, 0f, (deck.widthEmu * scale).toFloat(), (deck.heightEmu * scale).toFloat())
+                canvas.clipRect(page)
+                canvas.drawRect(page, Paint().apply { color = slide.backgroundArgb ?: Color.WHITE; style = Paint.Style.FILL })
+                for (element in slide.elements) {
+                    try {
+                        if (DeviceScale.outside(canvas, reach(element, scale))) continue
+                        when (element) {
+                            is Element.Shape -> drawShape(canvas, element, scale, this)
+                            is Element.Picture -> drawPicture(canvas, element, this, scale)
+                            is Element.Table -> drawTable(canvas, element, scale, this)
+                        }
+                    } catch (e: Exception) {
+                        // One bad shape (a corrupt embedded image, say) should not blank the
+                        // rest of a slide that is otherwise fine.
+                        if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                    } catch (e: OutOfMemoryError) {
+                        // Nor should one picture too large to decode.
+                        if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                    } catch (e: StackOverflowError) {
+                        if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                    }
+                }
+            } finally {
+                canvas.restore()
             }
-        } finally {
+        }
+
+        override fun close() {
+            pictures.clear()
+            texts.clear()
             zip?.close()
+        }
+
+        override fun render(index: Int, longSidePx: Int): Bitmap {
+            debugScale = (longSidePx / PageSource.REF_LONG_SIDE_PX.toDouble()).toFloat()
+            try { return super.render(index, longSidePx) } finally { debugScale = 1f }
         }
     }
 
-    private fun renderSlide(slide: Slide, zip: ZipFile?, scale: Double, pxW: Int, pxH: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bitmap)
-            canvas.drawColor(slide.backgroundArgb ?: Color.WHITE)
-            for (element in slide.elements) {
-                try {
-                    when (element) {
-                        is Element.Shape -> drawShape(canvas, element, scale)
-                        is Element.Picture -> drawPicture(canvas, element, zip, scale)
-                        is Element.Table -> drawTable(canvas, element, scale)
-                    }
-                } catch (e: Exception) {
-                    // One bad shape (a corrupt embedded image, say) should not blank the
-                    // rest of a slide that is otherwise fine.
-                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
-                } catch (e: OutOfMemoryError) {
-                    // Nor should one picture too large to decode.
-                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
-                } catch (e: StackOverflowError) {
-                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
-                }
-            }
-        } catch (e: Throwable) {
-            bitmap.recycle()
-            throw e
+    /** Text laid out for one box at one scale, kept while its slide is drawn again. */
+    internal data class TextKey(val body: Identity, val left: Float, val top: Float, val right: Float, val bottom: Float, val scale: Double)
+
+    /** Compares by reference: a slide's text bodies are equal by value to others that sit elsewhere. */
+    internal class Identity(val of: Any) {
+        override fun equals(other: Any?) = other is Identity && other.of === of
+        override fun hashCode() = System.identityHashCode(of)
+    }
+
+    /**
+     * Where [element] can draw, generously: its box turned any way, with room for
+     * its outline, arrowheads and shadow. Text is not bounded (it may run far past
+     * a box that doesn't wrap or shrink it), so a shape with text always draws;
+     * laid-out text is kept between draws and draws only its lines in the clip.
+     */
+    private fun reach(element: Element, scale: Double): RectF {
+        val everywhere = RectF(-1e9f, -1e9f, 1e9f, 1e9f)
+        val (shadow, rotation, s3) = when (element) {
+            is Element.Shape -> { if (element.text != null) return everywhere; Triple(element.shadow, element.rotation, element.scene3d) }
+            is Element.Picture -> Triple(element.shadow, element.rotation, element.scene3d)
+            is Element.Table -> return everywhere
         }
-        return bitmap
+        if (s3 != null) return everywhere
+        var r = element.box.toRectF(scale)
+        r.sort()
+        // A custom outline may reach past its box (a callout's pointer).
+        if (element is Element.Shape) element.outline?.let { ops ->
+            val b = RectF(); outlinePath(ops, element.box.toRectF(scale)).computeBounds(b, true); b.sort(); r.union(b)
+        }
+        val pad = when (element) {
+            is Element.Shape -> (maxOf(element.strokeWidthEmu * 4.0, 7 * EMU_PER_POINT) * scale).toFloat()
+            else -> 1f
+        }
+        r.inset(-pad, -pad)
+        if (rotation != 0f) r = DeviceScale.anyTurn(r)
+        shadow?.let { sh ->
+            val blur = (sh.blurEmu * scale).toFloat().coerceAtMost(400f) * 2f + 1f
+            val moved = RectF(r).apply { offset((sh.dxEmu * scale).toFloat(), (sh.dyEmu * scale).toFloat()); inset(-blur, -blur) }
+            r.union(moved)
+        }
+        return r
     }
 
     private fun Box.toRectF(scale: Double): RectF = RectF(
@@ -117,9 +194,9 @@ internal object SlideRenderer {
      * text) onto the plane. An extrusion is its silhouette swept back from the
      * shape to its depth, in the extrusion color, before the shape itself.
      */
-    private fun drawShape(canvas: Canvas, shape: Element.Shape, scale: Double) {
+    private fun drawShape(canvas: Canvas, shape: Element.Shape, scale: Double, pages: Pages?) {
         val s3 = shape.scene3d
-        if (s3 == null) { drawFlatShape(canvas, shape, scale); return }
+        if (s3 == null) { drawFlatShape(canvas, shape, scale, pages); return }
         val rect = shape.box.toRectF(scale)
         val filled = shape.fillArgb != null || shape.gradient != null
         if (s3.depthEmu > 0 && (filled || shape.strokeArgb != null) && rect.width() > 0f && rect.height() > 0f) {
@@ -138,7 +215,7 @@ internal object SlideRenderer {
         }
         canvas.save()
         canvas.concat(plane(rect, s3, 0f))
-        drawFlatShape(canvas, shape, scale)
+        drawFlatShape(canvas, shape, scale, pages)
         canvas.restore()
     }
 
@@ -187,7 +264,7 @@ internal object SlideRenderer {
         return (argb and 0xFF000000.toInt()) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
     }
 
-    private fun drawFlatShape(canvas: Canvas, shape: Element.Shape, scale: Double) {
+    private fun drawFlatShape(canvas: Canvas, shape: Element.Shape, scale: Double, pages: Pages?) {
         val rect = shape.box.toRectF(scale)
         if (shape.geometry == "line") {
             drawLine(canvas, shape, rect, scale)
@@ -196,13 +273,13 @@ internal object SlideRenderer {
         if (rect.width() <= 0f || rect.height() <= 0f) return
 
         val filled = shape.fillArgb != null || shape.gradient != null
-        shape.shadow?.takeIf { filled || strokePaint(shape, scale) != null }?.let { s ->
+        shape.shadow?.takeIf { filled || strokePaint(canvas, shape, scale) != null }?.let { s ->
             drawShadow(canvas, s, scale) { paint ->
                 canvas.withRotation(shape.rotation, rect) {
                     canvas.save()
                     if (shape.flipH || shape.flipV) canvas.scale(if (shape.flipH) -1f else 1f, if (shape.flipV) -1f else 1f, rect.centerX(), rect.centerY())
                     // The silhouette: the filled outline, or just the line when there is no fill.
-                    if (!filled) strokePaint(shape, scale)?.let { paint.style = Paint.Style.STROKE; paint.strokeWidth = it.strokeWidth }
+                    if (!filled) strokePaint(canvas, shape, scale)?.let { paint.style = Paint.Style.STROKE; paint.strokeWidth = it.strokeWidth }
                     val outline = shape.outline?.let { outlinePath(it, rect) }
                     if (outline != null) canvas.drawPath(outline, paint) else drawGeometry(canvas, shape.geometry, rect, paint)
                     canvas.restore()
@@ -228,13 +305,13 @@ internal object SlideRenderer {
                 })
                 shape.fillArgb != null -> draw(Paint(Paint.ANTI_ALIAS_FLAG).apply { color = shape.fillArgb; style = Paint.Style.FILL })
             }
-            strokePaint(shape, scale)?.let { paint ->
+            strokePaint(canvas, shape, scale)?.let { paint ->
                 draw(paint)
                 if (shape.outline != null && (shape.headArrow || shape.tailArrow)) drawPathArrows(canvas, shape, rect, paint, scale)
             }
             canvas.restore()
         }
-        shape.text?.let { drawText(canvas, it, rect, scale, shape.rotation) }
+        shape.text?.let { drawText(canvas, it, rect, scale, shape.rotation, pages) }
     }
 
     /**
@@ -255,10 +332,11 @@ internal object SlideRenderer {
         try { silhouette(paint) } finally { canvas.restore() }
     }
 
-    private fun strokePaint(shape: Element.Shape, scale: Double): Paint? {
+    private fun strokePaint(canvas: Canvas, shape: Element.Shape, scale: Double): Paint? {
         val color = shape.strokeArgb ?: return null
         if (shape.strokeWidthEmu <= 0) return null
-        val width = (shape.strokeWidthEmu * scale).toFloat().coerceAtLeast(1f)
+        // At least a device pixel, however far the page is zoomed.
+        val width = (shape.strokeWidthEmu * scale).toFloat().coerceAtLeast(DeviceScale.minStroke(canvas))
         return Paint(Paint.ANTI_ALIAS_FLAG).apply {
             this.color = color
             style = Paint.Style.STROKE
@@ -270,7 +348,7 @@ internal object SlideRenderer {
     /** A line runs corner to corner of its box (which may have zero width or
      *  height); the flips choose which diagonal and which end is the start. */
     private fun drawLine(canvas: Canvas, shape: Element.Shape, rect: RectF, scale: Double) {
-        val paint = strokePaint(shape, scale) ?: return
+        val paint = strokePaint(canvas, shape, scale) ?: return
         val x1 = if (shape.flipH) rect.right else rect.left
         val x2 = if (shape.flipH) rect.left else rect.right
         val y1 = if (shape.flipV) rect.bottom else rect.top
@@ -422,7 +500,7 @@ internal object SlideRenderer {
         }
     }
 
-    private fun drawPicture(canvas: Canvas, picture: Element.Picture, zip: ZipFile?, scale: Double) {
+    private fun drawPicture(canvas: Canvas, picture: Element.Picture, pages: Pages?, scale: Double) {
         val box = picture.box.toRectF(scale)
         if (box.width() <= 0f || box.height() <= 0f) return
         // A cropped picture is drawn at the size its *uncropped* source would have,
@@ -443,18 +521,27 @@ internal object SlideRenderer {
         if (picture.rotation != 0f) canvas.rotate(picture.rotation, box.centerX(), box.centerY())
         if (picture.crop != null) canvas.clipRect(box)
         try {
-            drawPictureContent(canvas, picture, zip, rect)
+            drawPictureContent(canvas, picture, pages, rect)
         } finally {
             canvas.restore()
         }
     }
 
-    private fun drawPictureContent(canvas: Canvas, picture: Element.Picture, zip: ZipFile?, rect: RectF) {
+    private fun drawPictureContent(canvas: Canvas, picture: Element.Picture, pages: Pages?, rect: RectF) {
+        // Decoded for the size it lands on the device, not on the page: a corner
+        // of a slide zoomed 6x wants its picture six times as sharp.
+        val k = DeviceScale.pxPerUnit(canvas)
+        val targetW = rect.width() * k
+        val targetH = rect.height() * k
+        val key: Any? = picture.data ?: picture.imageEntry
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        if (key != null) pages?.pictures?.get(key, targetW, targetH)?.let { canvas.drawBitmap(it, null, rect, paint); return }
         // Sources: extracted bytes (.ppt, from its blip store), or a zip entry
         // (.pptx). Vector formats go to their players; the rest is raster. A zip
         // entry's format is told from its bytes, not its name: decks do carry
         // WMF files named .emf.
         val data = picture.data
+        val zip = pages?.zip
         val bytes = if (data != null) data.load() else picture.imageEntry?.let { entryName ->
             zip?.getEntry(entryName)?.let { entry -> zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES) }
         }
@@ -470,11 +557,12 @@ internal object SlideRenderer {
             isRawWmf(bytes) -> { WmfRenderer.fromRaw(bytes)?.let { WmfRenderer.draw(canvas, it, rect) }; return }
             isSvg(bytes) -> { SvgRenderer.draw(canvas, bytes, rect); return }
         }
-        val bitmap = SafeBitmaps.decode(bytes, rect.width(), rect.height()) ?: return
+        val (bitmap, largest) = SafeBitmaps.decodeSized(bytes, targetW, targetH) ?: return
+        val kept = key != null && pages?.pictures?.put(key, bitmap, largest) == true
         try {
-            canvas.drawBitmap(bitmap, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            canvas.drawBitmap(bitmap, null, rect, paint)
         } finally {
-            bitmap.recycle()
+            if (!kept) bitmap.recycle()
         }
     }
 
@@ -491,7 +579,7 @@ internal object SlideRenderer {
         return root?.substringAfter(':') == "svg"
     }
 
-    private fun drawTable(canvas: Canvas, table: Element.Table, scale: Double) {
+    private fun drawTable(canvas: Canvas, table: Element.Table, scale: Double, pages: Pages?) {
         val totalW = table.columnWidthsEmu.sum().coerceAtLeast(1)
         val colXEmu = table.columnWidthsEmu.runningFold(0L) { acc, w -> acc + w }
         val totalH = table.rowHeightsEmu.sum().coerceAtLeast(1)
@@ -512,7 +600,7 @@ internal object SlideRenderer {
             // An empty cell keeps the row's own height.
             val text = cell.text?.takeIf { t -> t.paragraphs.any { !it.isEmpty } } ?: continue
             val w = ((colX((c + cell.colSpan).coerceAtMost(table.columnWidthsEmu.size)) - colX(c)) * scale).toFloat()
-            rowPx[r] = maxOf(rowPx[r], textHeight(text, w, scale))
+            rowPx[r] = maxOf(rowPx[r], textHeight(text, w, scale, pages))
         }
         val rowTop = rowPx.runningFold((table.box.y * scale).toFloat()) { acc, h -> acc + h }
         fun rowY(i: Int) = (rowTop[i] / scale).toLong()
@@ -533,13 +621,18 @@ internal object SlideRenderer {
                     canvas.drawRect(rect, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = cell.fillArgb; style = Paint.Style.FILL })
                 }
                 gridPaint?.let { canvas.drawRect(rect, it) }
-                cell.text?.let { drawText(canvas, it, rect, scale, 0f) }
+                cell.text?.let { drawText(canvas, it, rect, scale, 0f, pages) }
             }
         }
     }
 
     /** How tall [body] sets in a box [widthPx] wide, insets included. */
-    private fun textHeight(body: TextBody, widthPx: Float, scale: Double): Float {
+    private fun textHeight(body: TextBody, widthPx: Float, scale: Double, pages: Pages?): Float {
+        if (pages != null) {
+            val key = TextKey(Identity(body), widthPx, 0f, 0f, 0f, -scale)
+            (pages.texts[key] as? Float)?.let { return it }
+            return textHeight(body, widthPx, scale, null).also { pages.texts[key] = it }
+        }
         val width = (widthPx - ((body.insetLeftEmu + body.insetRightEmu) * scale).toFloat()).toInt()
         if (width <= 1) return 0f
         val text = body.paragraphs.mapIndexed { i, p -> layParagraph(p, i == 0, width, scale, 1f) }
@@ -547,13 +640,43 @@ internal object SlideRenderer {
         return text + ((body.insetTopEmu + body.insetBottomEmu) * scale).toFloat()
     }
 
-    private fun drawText(canvas: Canvas, body: TextBody, box: RectF, scale: Double, rotation: Float) {
+    /** Laid-out text: where its lines start, and its paragraphs. */
+    private class LaidText(val innerLeft: Float, val top: Float, val paragraphs: List<LaidParagraph>)
+
+    private fun drawText(canvas: Canvas, body: TextBody, box: RectF, scale: Double, rotation: Float, pages: Pages?) {
+        val key = pages?.let { TextKey(Identity(body), box.left, box.top, box.right, box.bottom, scale) }
+        val text = key?.let { pages.texts[it] as? LaidText } ?: layText(body, box, scale)?.also { t -> key?.let { pages.texts[it] = t } } ?: return
+        val innerLeft = text.innerLeft
+        var y = text.top
+        val debugScale = pages?.debugScale ?: 1f
+        canvas.withRotation(rotation, box) {
+            for (p in text.paragraphs) {
+                y += p.before
+                canvas.save()
+                canvas.translate(innerLeft + p.x, y)
+                p.layout.draw(canvas)
+                debugBaselines?.let { out ->
+                    for (l in 0 until p.layout.lineCount) {
+                        val t = p.layout.text.subSequence(p.layout.getLineStart(l), p.layout.getLineEnd(l)).toString().replace(WORD_JOINER.toString(), "").trim()
+                        if (t.isNotEmpty()) out += t to (y + p.layout.getLineBaseline(l)) * debugScale
+                    }
+                }
+                p.bullet?.let { (glyph, paint, bx) ->
+                    if (p.layout.lineCount > 0) drawBullet(canvas, glyph, bx - p.x, p.layout.getLineBaseline(0).toFloat(), paint)
+                }
+                canvas.restore()
+                y += p.layout.height + p.after
+            }
+        }
+    }
+
+    private fun layText(body: TextBody, box: RectF, scale: Double): LaidText? {
         var innerLeft = box.left + (body.insetLeftEmu * scale).toFloat()
         val innerTop = box.top + (body.insetTopEmu * scale).toFloat()
         val innerRight = box.right - (body.insetRightEmu * scale).toFloat()
         val innerBottom = box.bottom - (body.insetBottomEmu * scale).toFloat()
         var width = (innerRight - innerLeft).toInt().coerceAtLeast(1)
-        if (width <= 1 && body.wrap) return
+        if (width <= 1 && body.wrap) return null
         if (!body.wrap) {
             // Unwrapped text runs past its box; lay it out as wide as its longest
             // line and keep that line where the alignment puts it.
@@ -605,33 +728,14 @@ internal object SlideRenderer {
         } while (true)
         debugFit?.add(shrink to if (body.estimateFit) (step % 3) * 10f else 0f)
 
-        var y = innerTop + when (body.anchor) {
+        val y = innerTop + when (body.anchor) {
             VAnchor.TOP -> 0f
             // Text taller than its box overflows both ways when centered, upward
             // when anchored at the bottom, as PowerPoint draws it.
             VAnchor.MIDDLE -> (availableHeight - totalHeight) / 2f
             VAnchor.BOTTOM -> availableHeight - totalHeight
         }
-
-        canvas.withRotation(rotation, box) {
-            for (p in laid) {
-                y += p.before
-                canvas.save()
-                canvas.translate(innerLeft + p.x, y)
-                p.layout.draw(canvas)
-                debugBaselines?.let { out ->
-                    for (l in 0 until p.layout.lineCount) {
-                        val t = p.layout.text.subSequence(p.layout.getLineStart(l), p.layout.getLineEnd(l)).toString().replace(WORD_JOINER.toString(), "").trim()
-                        if (t.isNotEmpty()) out += t to (y + p.layout.getLineBaseline(l))
-                    }
-                }
-                p.bullet?.let { (glyph, paint, bx) ->
-                    if (p.layout.lineCount > 0) drawBullet(canvas, glyph, bx - p.x, p.layout.getLineBaseline(0).toFloat(), paint)
-                }
-                canvas.restore()
-                y += p.layout.height + p.after
-            }
-        }
+        return LaidText(innerLeft, y, laid)
     }
 
     /** A laid-out paragraph: [x] is its offset from the inner left edge, and a

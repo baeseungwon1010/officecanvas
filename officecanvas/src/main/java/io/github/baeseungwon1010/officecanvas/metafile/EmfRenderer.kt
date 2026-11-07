@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
+import io.github.baeseungwon1010.officecanvas.util.DeviceScale
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -339,11 +340,13 @@ internal object EmfRenderer {
             if (pen.style and 0xF == PS_NULL) return
             val m = transform()
             val t = Path(p).apply { transform(m) }
-            val width = if (pen.cosmetic || pen.width <= 0f) 1f else m.mapRadius(pen.width)
+            // A cosmetic pen is a device pixel wide, however the page is zoomed.
+            val px = DeviceScale.minStroke(canvas)
+            val width = if (pen.cosmetic || pen.width <= 0f) px else m.mapRadius(pen.width)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = pen.color
                 style = Paint.Style.STROKE
-                strokeWidth = width.coerceAtLeast(0.75f)
+                strokeWidth = width.coerceAtLeast(0.75f * px)
                 strokeJoin = Paint.Join.ROUND
                 strokeCap = Paint.Cap.ROUND
                 when (pen.style and 0xF) {

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import io.github.baeseungwon1010.officecanvas.util.DeviceScale
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -245,7 +246,7 @@ internal object WmfRenderer {
         private fun strokePaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = pen.color
-            strokeWidth = maxOf(1f, pen.width * minOf(sx(), sy()))
+            strokeWidth = maxOf(DeviceScale.minStroke(canvas), pen.width * minOf(sx(), sy()))
             strokeJoin = Paint.Join.ROUND
         }
 

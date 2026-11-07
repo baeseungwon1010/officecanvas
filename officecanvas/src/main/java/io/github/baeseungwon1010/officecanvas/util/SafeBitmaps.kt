@@ -23,7 +23,10 @@ internal object SafeBitmaps {
      * so thin lines and small text vanish; subsampled decoding plus halving steps
      * averages them in instead. Null when the image can't be read or sized.
      */
-    fun decode(bytes: ByteArray, targetW: Float, targetH: Float): Bitmap? {
+    fun decode(bytes: ByteArray, targetW: Float, targetH: Float): Bitmap? = decodeSized(bytes, targetW, targetH)?.first
+
+    /** [decode], and whether the bitmap is as large as the picture can be decoded (nothing bigger to cache). */
+    fun decodeSized(bytes: ByteArray, targetW: Float, targetH: Float): Pair<Bitmap, Boolean>? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         val w = bounds.outWidth.toLong()
@@ -39,12 +42,14 @@ internal object SafeBitmaps {
         } catch (e: OutOfMemoryError) {
             null
         } ?: return null
+        var largest = sample == 1 || (w / (sample / 2)) * (h / (sample / 2)) > MAX_PIXELS
         while (bmp.width >= tw * 2 && bmp.height >= th * 2 && bmp.width > 2 && bmp.height > 2) {
             val half = Bitmap.createScaledBitmap(bmp, bmp.width / 2, bmp.height / 2, true)
             if (half !== bmp) bmp.recycle()
             bmp = half
+            largest = false
         }
-        return bmp
+        return bmp to largest
     }
 
     /** Decodes with only the pixel budget, when the drawn size isn't known. */

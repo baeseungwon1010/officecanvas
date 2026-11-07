@@ -8,7 +8,10 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import io.github.baeseungwon1010.officecanvas.slide.OfficeFonts
 import io.github.baeseungwon1010.officecanvas.slide.SlideRenderer
+import io.github.baeseungwon1010.officecanvas.util.DeviceScale
 import io.github.baeseungwon1010.officecanvas.util.Limits
+import io.github.baeseungwon1010.officecanvas.util.PageSource
+import io.github.baeseungwon1010.officecanvas.util.PictureCache
 import io.github.baeseungwon1010.officecanvas.util.SafeBitmaps
 import io.github.baeseungwon1010.officecanvas.util.readCapped
 import java.io.File
@@ -28,42 +31,70 @@ internal object HwpxRenderer {
     /** Renders every page at [targetLongSidePx] on its longer edge, one at a time,
      *  via [onPage] — same streaming shape as SlideRenderer.render, for the same
      *  reason: a many-page document should not need every page's bitmap alive at
-     *  once. */
+     *  once. Pages without a size are left out. */
     fun render(doc: HwpxDoc, hwpxFile: File, targetLongSidePx: Int, onPage: (index: Int, bitmap: Bitmap) -> Unit) {
-        // A .hwp is an OLE2 file, not a zip; its pictures travel inside the model.
-        val zip = try { ZipFile(hwpxFile) } catch (e: Exception) { null }
-        zip.use { zip ->
-            doc.pages.forEachIndexed { index, page ->
-                if (page.widthHu <= 0 || page.heightHu <= 0) return@forEachIndexed
-                val scale = targetLongSidePx.toDouble() / maxOf(page.widthHu, page.heightHu)
-                val pxW = (page.widthHu * scale).toInt().coerceAtLeast(1)
-                val pxH = (page.heightHu * scale).toInt().coerceAtLeast(1)
-                onPage(index, renderPage(page, zip, scale, pxW, pxH))
-            }
+        Pages(doc, hwpxFile, PageSource.RENDER_CACHE_BYTES).use { pages ->
+            for (i in 0 until pages.pageCount) onPage(i, pages.render(i, targetLongSidePx))
         }
     }
 
-    private fun renderPage(page: HwpxPage, zip: ZipFile?, scale: Double, pxW: Int, pxH: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bitmap)
-            canvas.drawColor(Color.WHITE)
-            canvas.translate((page.bodyXHu * scale).toFloat(), (page.bodyYHu * scale).toFloat())
-            for (el in page.elements) {
-                try {
-                    drawElement(canvas, el, 0L, 0L, zip, scale, 0)
-                } catch (e: Exception) {
-                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
-                } catch (e: OutOfMemoryError) {
-                    if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
-                }
-            }
-        } catch (e: Throwable) {
-            bitmap.recycle()
-            throw e
+    /**
+     * A document opened for drawing, in reference pixels (each page's long side
+     * [PageSource.REF_LONG_SIDE_PX] px) under the canvas's matrix: text is measured,
+     * justified and squeezed there, so it sets the same at every zoom. Holds the zip
+     * the pictures come from and decoded pictures. One thread at a time.
+     */
+    class Pages(doc: HwpxDoc, file: File, cacheBytes: Long) : PageSource {
+        private val sheets = doc.pages.filter { it.widthHu > 0 && it.heightHu > 0 }
+        // A .hwp is an OLE2 file, not a zip; its pictures travel inside the model.
+        internal val zip: ZipFile? = try { ZipFile(file) } catch (e: Exception) { null }
+        internal val pictures = PictureCache(cacheBytes)
+        /** BinData entry for each picture name, found once. */
+        internal val entries = HashMap<String, java.util.zip.ZipEntry?>()
+
+        private fun scale(page: HwpxPage) = PageSource.REF_LONG_SIDE_PX.toDouble() / maxOf(page.widthHu, page.heightHu)
+
+        override val pageCount get() = sheets.size
+        override fun widthPt(index: Int) = sheets[index].widthHu / HU_PER_PT
+        override fun heightPt(index: Int) = sheets[index].heightHu / HU_PER_PT
+        override fun refPxPerPt(index: Int) = scale(sheets[index]) * HU_PER_PT
+
+        override fun renderSize(index: Int, longSidePx: Int): Pair<Int, Int> {
+            val page = sheets[index]
+            val s = longSidePx.toDouble() / maxOf(page.widthHu, page.heightHu)
+            return (page.widthHu * s).toInt().coerceAtLeast(1) to (page.heightHu * s).toInt().coerceAtLeast(1)
         }
-        return bitmap
+
+        override fun drawRef(canvas: Canvas, index: Int) {
+            val page = sheets[index]
+            val scale = scale(page)
+            canvas.save()
+            try {
+                val sheet = RectF(0f, 0f, (page.widthHu * scale).toFloat(), (page.heightHu * scale).toFloat())
+                canvas.clipRect(sheet)
+                canvas.drawRect(sheet, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL })
+                canvas.translate((page.bodyXHu * scale).toFloat(), (page.bodyYHu * scale).toFloat())
+                for (el in page.elements) {
+                    try {
+                        drawElement(canvas, el, 0L, 0L, this, scale, 0)
+                    } catch (e: Exception) {
+                        if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                    } catch (e: OutOfMemoryError) {
+                        if (DEBUG_LOG_DRAW_ERRORS) e.printStackTrace()
+                    }
+                }
+            } finally {
+                canvas.restore()
+            }
+        }
+
+        override fun close() {
+            pictures.clear()
+            zip?.close()
+        }
     }
+
+    private const val HU_PER_PT = HWPUNIT_PER_INCH / 72.0
 
     /**
      * Draws one line. Hangul decided where the line starts and how wide its column
@@ -73,7 +104,7 @@ internal object HwpxRenderer {
      */
     private fun drawText(
         canvas: Canvas, run: HwpxElement.TextRun, offsetXHu: Double, offsetYHu: Double, scale: Double,
-        zip: ZipFile? = null, depth: Int = 0
+        pages: Pages? = null, depth: Int = 0
     ): Long {
         if (run.spans.isEmpty()) return 0
         val paints = run.spans.map { paintFor(it, scale) }
@@ -97,7 +128,13 @@ internal object HwpxRenderer {
         if (squeeze < 1f) paints.forEach { it.textScaleX *= squeeze }
         val width = if (gaps > 0) avail else natural * squeeze
 
-        var x = ((run.xHu + offsetXHu) * scale).toFloat() + when (run.align) {
+        val left = ((run.xHu + offsetXHu) * scale).toFloat()
+        val baseline0 = ((run.yHu + offsetYHu + run.baselineHu) * scale).toFloat()
+        if (run.spans.none { it.inline != null }) {
+            val size = paints.maxOf { it.textSize }
+            if (DeviceScale.outside(canvas, RectF(left - size, baseline0 - size * 2f, left + maxOf(avail, width) + size, baseline0 + size))) return 0
+        }
+        var x = left + when (run.align) {
             ParaAlign.CENTER -> ((avail - width) / 2f).coerceAtLeast(0f)
             ParaAlign.RIGHT -> (avail - width).coerceAtLeast(0f)
             else -> 0f
@@ -109,7 +146,7 @@ internal object HwpxRenderer {
             val paint = paints[i]
             val y = baseline - span.style.script * paint.textSize * 0.4f
             if (span.tabHu != null) {
-                span.inline?.let { drawInline(canvas, it, x, baseline, zip, scale, depth) }
+                span.inline?.let { drawInline(canvas, it, x, baseline, pages, scale, depth) }
                 x += spanWidth(span, paint, scale)
                 index += span.text.length
                 continue
@@ -210,14 +247,14 @@ internal object HwpxRenderer {
      * An object in a line at [x] (px) on the line's [baseline] (px): an equation
      * puts its own baseline there, anything else its bottom.
      */
-    private fun drawInline(canvas: Canvas, obj: HwpxElement, x: Float, baseline: Float, zip: ZipFile?, scale: Double, depth: Int) {
+    private fun drawInline(canvas: Canvas, obj: HwpxElement, x: Float, baseline: Float, pages: Pages?, scale: Double, depth: Int) {
         if (depth > Limits.MAX_NESTING) return
         val base = baseline / scale
         val top = when (obj) {
             is HwpxElement.Equation -> base - obj.heightHu * obj.baselinePercent / 100.0
             else -> base - obj.extentHu
         }
-        drawElement(canvas, obj.at((x / scale).toLong(), top.toLong()), 0, 0, zip, scale, depth + 1)
+        drawElement(canvas, obj.at((x / scale).toLong(), top.toLong()), 0, 0, pages, scale, depth + 1)
     }
 
     /** [span]'s width in HWPUNIT as [drawText] draws it (the same face, size,
@@ -272,17 +309,17 @@ internal object HwpxRenderer {
 
     private val SERIF_FACES = listOf("바탕", "명조", "궁서", "batang", "myeongjo", "gungsuh", "times", "serif", "신명", "한양신명조", "함초롬바탕", "cambria", "georgia", "garamond", "palatino", "book antiqua", "century")
 
-    private fun drawElement(canvas: Canvas, el: HwpxElement, dx: Long, dy: Long, zip: ZipFile?, scale: Double, depth: Int) {
+    private fun drawElement(canvas: Canvas, el: HwpxElement, dx: Long, dy: Long, pages: Pages?, scale: Double, depth: Int) {
         when (el) {
-            is HwpxElement.TextRun -> { drawText(canvas, el, dx.toDouble(), dy.toDouble(), scale, zip, depth) }
-            is HwpxElement.Table -> if (depth <= Limits.MAX_NESTING) drawTable(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
-            is HwpxElement.ImageEl -> drawImage(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale)
-            is HwpxElement.Drawing -> if (depth <= Limits.MAX_NESTING) drawDrawing(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), zip, scale, depth)
+            is HwpxElement.TextRun -> { drawText(canvas, el, dx.toDouble(), dy.toDouble(), scale, pages, depth) }
+            is HwpxElement.Table -> if (depth <= Limits.MAX_NESTING) drawTable(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), pages, scale, depth)
+            is HwpxElement.ImageEl -> drawImage(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), pages, scale)
+            is HwpxElement.Drawing -> if (depth <= Limits.MAX_NESTING) drawDrawing(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), pages, scale, depth)
             is HwpxElement.Equation -> drawEquation(canvas, el.copy(xHu = el.xHu + dx, yHu = el.yHu + dy), scale)
         }
     }
 
-    private fun drawTable(canvas: Canvas, table: HwpxElement.Table, zip: ZipFile?, scale: Double, depth: Int) {
+    private fun drawTable(canvas: Canvas, table: HwpxElement.Table, pages: Pages?, scale: Double, depth: Int) {
         val totalW = table.columnWidthsHu.sum().coerceAtLeast(1)
         val colXHu = table.columnWidthsHu.runningFold(0L) { acc, w -> acc + w }
         val totalH = table.rowHeightsHu.sum().coerceAtLeast(1)
@@ -319,8 +356,8 @@ internal object HwpxRenderer {
             var pushed = 0L
             if (p.cell.clip) { canvas.save(); canvas.clipRect(p.rect) }
             for (el in p.cell.elements.sortedBy { it.yHu }) {
-                if (el is HwpxElement.TextRun) pushed += drawText(canvas, el, p.left.toDouble(), (p.top + dy + pushed).toDouble(), scale, zip, depth + 1)
-                else drawElement(canvas, el, p.left, p.top + dy + pushed, zip, scale, depth + 1)
+                if (el is HwpxElement.TextRun) pushed += drawText(canvas, el, p.left.toDouble(), (p.top + dy + pushed).toDouble(), scale, pages, depth + 1)
+                else drawElement(canvas, el, p.left, p.top + dy + pushed, pages, scale, depth + 1)
             }
             if (p.cell.clip) canvas.restore()
         }
@@ -330,7 +367,7 @@ internal object HwpxRenderer {
             fun line(b: Border?, x0: Float, y0: Float, x1: Float, y1: Float) {
                 b ?: return
                 canvas.drawLine(x0, y0, x1, y1, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = b.argb; style = Paint.Style.STROKE; strokeWidth = (b.widthHu * scale).toFloat().coerceAtLeast(1f)
+                    color = b.argb; style = Paint.Style.STROKE; strokeWidth = (b.widthHu * scale).toFloat().coerceAtLeast(DeviceScale.minStroke(canvas))
                 })
             }
             val r = p.rect
@@ -342,7 +379,7 @@ internal object HwpxRenderer {
     }
 
     /** A rectangle, ellipse, line or polygon, filled and outlined, with any text box content on top. */
-    private fun drawDrawing(canvas: Canvas, d: HwpxElement.Drawing, zip: ZipFile?, scale: Double, depth: Int) {
+    private fun drawDrawing(canvas: Canvas, d: HwpxElement.Drawing, pages: Pages?, scale: Double, depth: Int) {
         val r = RectF((d.xHu * scale).toFloat(), (d.yHu * scale).toFloat(),
             ((d.xHu + d.widthHu) * scale).toFloat(), ((d.yHu + d.heightHu) * scale).toFloat())
         val path = android.graphics.Path()
@@ -358,17 +395,23 @@ internal object HwpxRenderer {
             }
         }
         if (d.kind == DrawingKind.POLYGON && d.points.size > 2) path.close()
-        if (d.kind != DrawingKind.LINE) d.fillArgb?.let { canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = it; style = Paint.Style.FILL }) }
-        d.lineArgb?.let {
-            canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = it; style = Paint.Style.STROKE; strokeWidth = (d.lineWidthHu * scale).toFloat().coerceAtLeast(1f)
-            })
+        val reach = RectF().also { path.computeBounds(it, true); it.union(r); it.sort() }
+        val pad = (d.lineWidthHu * scale).toFloat() + 2f
+        reach.inset(-pad, -pad)
+        // (Its text box content is still drawn when the shape is out of view: text can overflow it.)
+        if (!DeviceScale.outside(canvas, reach)) {
+            if (d.kind != DrawingKind.LINE) d.fillArgb?.let { canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = it; style = Paint.Style.FILL }) }
+            d.lineArgb?.let {
+                canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = it; style = Paint.Style.STROKE; strokeWidth = (d.lineWidthHu * scale).toFloat().coerceAtLeast(DeviceScale.minStroke(canvas))
+                })
+            }
         }
         if (d.content.isEmpty()) return
         val bottom = d.content.maxOf { it.yHu + it.extentHu }
         val room = (d.heightHu - bottom).coerceAtLeast(0)
         val dy = when (d.contentVAlign) { 1 -> room / 2; 2 -> room; else -> 0L }
-        for (el in d.content) drawElement(canvas, el, d.xHu, d.yHu + dy, zip, scale, depth + 1)
+        for (el in d.content) drawElement(canvas, el, d.xHu, d.yHu + dy, pages, scale, depth + 1)
     }
 
     /**
@@ -379,6 +422,8 @@ internal object HwpxRenderer {
         val boxW = (eq.widthHu * scale).toFloat()
         val boxH = (eq.heightHu * scale).toFloat()
         if (boxW < 1f || boxH < 1f) return
+        val x0 = (eq.xHu * scale).toFloat(); val y0 = (eq.yHu * scale).toFloat()
+        if (DeviceScale.outside(canvas, RectF(x0 - boxW, y0 - boxH, x0 + boxW * 2, y0 + boxH * 2))) return
         val laid = EquationLayout(eq.colorArgb).layout(eq.tree ?: EquationParser.parse(eq.script), (eq.sizeHu * scale).toFloat())
         if (laid.width <= 0f || laid.height <= 0f) return
         val k = minOf(boxW / laid.width, boxH / laid.height, 1.25f).coerceAtLeast(0.2f)
@@ -390,21 +435,12 @@ internal object HwpxRenderer {
         canvas.restore()
     }
 
-    private fun drawImage(canvas: Canvas, image: HwpxElement.ImageEl, zip: ZipFile?, scale: Double) {
+    private fun drawImage(canvas: Canvas, image: HwpxElement.ImageEl, pages: Pages?, scale: Double) {
         val rect = RectF(
             (image.xHu * scale).toFloat(), (image.yHu * scale).toFloat(),
             ((image.xHu + image.widthHu) * scale).toFloat(), ((image.yHu + image.heightHu) * scale).toFloat()
         )
-        val bytes = image.bytes?.invoke() ?: run {
-            // BinData/<id>.<ext>: the reference in the XML omits the extension, so the
-            // matching zip entry is found by prefix rather than assumed.
-            val name = image.zipEntry ?: return
-            // (Exactly that name before the extension: "image1" must not find image10.png.)
-            val entry = zip?.entries()?.asSequence()?.firstOrNull {
-                it.name == "BinData/$name" || it.name.startsWith("BinData/$name.")
-            } ?: return
-            zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES)
-        } ?: return
+        if (DeviceScale.outside(canvas, rect)) return
         // A cropped picture is drawn at the size the whole image would have, shifted so
         // the visible part lands in the box, and clipped to the box.
         val c = image.crop
@@ -413,14 +449,34 @@ internal object HwpxRenderer {
             val h = rect.height() / (1f - c.top - c.bottom)
             RectF(rect.left - c.left * w, rect.top - c.top * h, rect.left - c.left * w + w, rect.top - c.top * h + h)
         }
-        val bitmap = SafeBitmaps.decode(bytes, full.width(), full.height()) ?: return
+        // Decoded for its size on the device: zoomed in, sharper.
+        val k = DeviceScale.pxPerUnit(canvas)
+        val key: Any? = image.bytes ?: image.zipEntry
+        val cached = key?.let { pages?.pictures?.get(it, full.width() * k, full.height() * k) }
+        var kept = cached != null
+        val bitmap = cached ?: run {
+            val bytes = image.bytes?.invoke() ?: run {
+                // BinData/<id>.<ext>: the reference in the XML omits the extension, so the
+                // matching zip entry is found by prefix rather than assumed.
+                val name = image.zipEntry ?: return
+                val zip = pages?.zip ?: return
+                // (Exactly that name before the extension: "image1" must not find image10.png.)
+                val entry = pages.entries.getOrPut(name) {
+                    zip.entries().asSequence().firstOrNull { it.name == "BinData/$name" || it.name.startsWith("BinData/$name.") }
+                } ?: return
+                zip.readCapped(entry, SafeBitmaps.MAX_IMAGE_BYTES)
+            } ?: return
+            val (decoded, largest) = SafeBitmaps.decodeSized(bytes, full.width() * k, full.height() * k) ?: return
+            kept = key != null && pages?.pictures?.put(key, decoded, largest) == true
+            decoded
+        }
         canvas.save()
         try {
             canvas.clipRect(rect)
             canvas.drawBitmap(bitmap, null, full, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         } finally {
             canvas.restore()
-            bitmap.recycle()
+            if (!kept) bitmap.recycle()
         }
     }
 }
