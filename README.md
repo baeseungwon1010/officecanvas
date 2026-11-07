@@ -107,11 +107,11 @@ and the dependency in your module:
 
 ```kotlin
 dependencies {
-    implementation("com.github.baeseungwon1010:officecanvas:0.5.4")
+    implementation("com.github.baeseungwon1010:officecanvas:0.5.5")
 }
 ```
 
-Any commit hash or `main-SNAPSHOT` works as the version too. To build it yourself instead, run `./gradlew :officecanvas:publishToMavenLocal` and depend on `io.github.baeseungwon1010:officecanvas:0.5.4` from `mavenLocal()`.
+Any commit hash or `main-SNAPSHOT` works as the version too. To build it yourself instead, run `./gradlew :officecanvas:publishToMavenLocal` and depend on `io.github.baeseungwon1010:officecanvas:0.5.5` from `mavenLocal()`.
 
 Requirements: minSdk 24, Java 17 toolchain. The AAR is about 3 MB, most of it bundled fonts (see below).
 
