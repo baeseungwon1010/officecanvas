@@ -15,9 +15,12 @@ internal object PdfFit {
 
     private val MARK = Regex("§PG(\\d+)§")
 
-    /** [page] with a mark of its index at its top, for [spilling] to find. */
+    /**
+     * [page] with a mark of its index at its top, for [spilling] to find, and its bottom margin
+     * 3 % of the page higher: other fonts than the ones measured with may set the text a little longer.
+     */
     fun marked(page: ConvPage, index: Int): ConvPage = ConvPage(
-        page.width, page.height, page.marginLeft, page.marginRight, page.marginTop, page.marginBottom,
+        page.width, page.height, page.marginLeft, page.marginRight, page.marginTop, page.marginBottom + page.height * 0.03,
         listOf(ConvParagraph(listOf(ConvRun("§PG$index§", "", 1.0)), lineHeight = 0.5)) + page.blocks,
         page.floating, page.header, page.headerTop, page.footer, page.footerBottom
     )
