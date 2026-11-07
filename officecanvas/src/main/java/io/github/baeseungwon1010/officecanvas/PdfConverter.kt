@@ -5,6 +5,7 @@ import io.github.baeseungwon1010.officecanvas.convert.DocxWriter
 import io.github.baeseungwon1010.officecanvas.convert.HwpWriter
 import io.github.baeseungwon1010.officecanvas.convert.HwpxWriter
 import io.github.baeseungwon1010.officecanvas.convert.PageSink
+import io.github.baeseungwon1010.officecanvas.convert.PdfFit
 import io.github.baeseungwon1010.officecanvas.convert.PdfLayout
 import io.github.baeseungwon1010.officecanvas.pdf.PdfCrypt
 import io.github.baeseungwon1010.officecanvas.pdf.PdfDocument
@@ -36,12 +37,17 @@ enum class ConvertFormat {
  * PdfConverter.convert(pdf, File(dir, "out.docx"), ConvertFormat.DOCX)
  * ```
  *
- * Conversion runs on the calling thread and needs no Android APIs.
+ * Conversion runs on the calling thread. Android's graphics draw the PDF's drawings as
+ * pictures and lay the document out once more to keep each PDF page to one page;
+ * without them (a plain JVM) both are left out.
  */
 object PdfConverter {
 
     /** Documents longer than this are converted up to this many pages. */
     const val MAX_PAGES = Limits.MAX_PAGES
+
+    /** Documents up to this long are laid out again to keep each PDF page to one page. */
+    private const val MAX_FIT_PAGES = 300
 
     /**
      * Converts [pdf] into [output] in [format].
@@ -133,19 +139,34 @@ object PdfConverter {
                     hangul > latin -> if (serif > sans) "바탕" else "맑은 고딕"
                     else -> if (serif > sans) "Times New Roman" else "Arial"
                 }
+                // Pages as laid out, [tight]er where that was needed, [mark]ed for PdfFit.
+                fun write(sink: PageSink, tight: Map<Int, Int>, mark: Boolean) {
+                    for ((i, p) in pages.withIndex()) {
+                        val c = reader.read(p)
+                        val pictures = c.pictures.mapNotNull { pic ->
+                            pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || PdfLayout.placeKey(pic) in decorations) }
+                        }
+                        var page = PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1)
+                        tight[i]?.let { step -> page = PdfFit.tighten(page, step) }
+                        if (mark) page = PdfFit.marked(page, i)
+                        sink.page(page)
+                    }
+                    sink.finish()
+                }
+                // Each PDF page should stay one page: laid out as a word processor would, pages whose
+                // text runs onto the next are set tighter, a step at a time.
+                val tight = HashMap<Int, Int>()
+                if (pages.size <= MAX_FIT_PAGES) for (round in 0 until PdfFit.STEPS) {
+                    val spill = PdfFit.spilling(font) { write(it, tight, mark = true) }
+                    if (spill.isEmpty()) break
+                    for (i in spill) tight[i] = (tight[i] ?: 0) + 1
+                }
                 val sink: PageSink = when (format) {
                     ConvertFormat.DOCX -> DocxWriter(output, font)
                     ConvertFormat.HWPX -> HwpxWriter(output, font)
                     ConvertFormat.HWP -> HwpWriter(output, font)
                 }
-                for ((i, p) in pages.withIndex()) {
-                    val c = reader.read(p)
-                    val pictures = c.pictures.mapNotNull { pic ->
-                        pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || PdfLayout.placeKey(pic) in decorations) }
-                    }
-                    sink.page(PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1))
-                }
-                sink.finish()
+                write(sink, tight, mark = false)
                 return pages.size
             }
         } catch (e: OfficeCanvasException) {
