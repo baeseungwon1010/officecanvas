@@ -67,7 +67,7 @@ class PdfReaderTest {
             assertTrue(all.any { c -> c.rects.any { it.color == 0xFFFFF2CC.toInt() } })
             assertTrue(all.any { c -> c.rects.any { it.color == 0xFFD9E2F3.toInt() } })
             assertTrue(all.sumOf { it.lines.size + it.rects.size } > 10)
-            val pic = all.flatMap { it.pictures }.single()
+            val pic = all.flatMap { it.pictures }.single { !it.drawing }
             val image = pic.image()!!
             assertEquals(2.0, image.width.toDouble() / image.height, 0.05)
             assertEquals(2.0, pic.w / pic.h, 0.05)

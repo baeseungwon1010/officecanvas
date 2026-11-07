@@ -43,6 +43,12 @@ internal class PdfShape(
             // A filled shape of level and upright sides other than a rectangle (an arrow, an L).
             if (fill != null && sp.distinctBy { (Math.round(it[0] * 10) to Math.round(it[1] * 10)) }.size > 5) return true
         }
+        // A filled box (a slide's background, a panel, a highlight): drawn too, as there's nothing else to
+        // draw it with but a cell's or a paragraph's shading, which only some are, and that in the same place.
+        if (fill != null) {
+            if (rects.any { it[2] >= 3 && it[3] >= 3 }) return true
+            if (subpaths.any { sp -> sp.size >= 4 && sp.maxOf { it[0] } - sp.minOf { it[0] } >= 3 && sp.maxOf { it[1] } - sp.minOf { it[1] } >= 3 }) return true
+        }
         return false
     }
 }
