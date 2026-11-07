@@ -9,15 +9,16 @@ internal object TestPdf {
     /**
      * A page ([width] x [height], US Letter by default) drawing [content], with [fonts] as its font resources: name to a base
      * font, or to a whole font dictionary ("<< ... >>"). [extra] objects follow the fonts', numbered
-     * from 5 + the number of fonts, for such dictionaries to refer to.
+     * from 5 + the number of fonts, for such dictionaries to refer to; [xobjects] are the page's
+     * XObject resources ("/Im1 6 0 R").
      */
-    fun page(content: String, fonts: Map<String, String>, extra: List<String> = emptyList(), width: Int = 612, height: Int = 792): File {
+    fun page(content: String, fonts: Map<String, String>, extra: List<String> = emptyList(), width: Int = 612, height: Int = 792, xobjects: String = ""): File {
         val names = fonts.keys.toList()
         val fontRefs = names.withIndex().joinToString(" ") { (i, n) -> "/$n ${5 + i} 0 R" }
         val objects = listOf(
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $width $height] /Resources << /Font << $fontRefs >> >> /Contents 4 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $width $height] /Resources << /Font << $fontRefs >> /XObject << $xobjects >> >> /Contents 4 0 R >>",
             "<< /Length ${content.length} >>\nstream\n$content\nendstream"
         ) + names.map { n -> fonts.getValue(n).let { if (it.startsWith("<<")) it else "<< /Type /Font /Subtype /Type1 /BaseFont /$it >>" } } + extra
         val out = ByteArrayOutputStream()

@@ -211,9 +211,13 @@ internal object PdfImages {
         val bpc = (doc.num(s.dict["BitsPerComponent"])?.toInt() ?: 8).coerceIn(1, 16)
         val rowBytes = ((mw.toLong() * bpc + 7) / 8).toInt()
         val maxV = (1 shl bpc) - 1
+        // Its /Decode maps the samples ([1 0] inverts them: 0 opaque, the most transparent).
+        val range = doc.array(s.dict["Decode"])?.items?.mapNotNull { doc.num(it) }?.takeIf { it.size >= 2 }
+        val d0 = range?.get(0) ?: 0.0; val d1 = range?.get(1) ?: 1.0
         return ByteArray(w * h) { i ->
             val x = (i % w) * mw / w; val y = (i / w) * mh / h
-            (sample(dec.bytes, y * rowBytes, x.toLong() * bpc, bpc) * 255 / maxV).toByte()
+            val v = d0 + sample(dec.bytes, y * rowBytes, x.toLong() * bpc, bpc).toDouble() / maxV * (d1 - d0)
+            (v.coerceIn(0.0, 1.0) * 255 + 0.5).toInt().toByte()
         }
     }
 

@@ -48,6 +48,24 @@ class PdfDrawingTest {
     }
 
     @Test
+    fun `a soft mask with Decode 1 0 is inverted`() {
+        // A red 2 x 2 picture whose mask samples are all 0, read as fully opaque through its /Decode [1 0].
+        val stream = { dict: String, hex: String -> "<< $dict /Filter /ASCIIHexDecode /Length ${hex.length + 1} >>\nstream\n$hex>\nendstream" }
+        val image = stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB /SMask 7 0 R", "FF0000".repeat(4))
+        val mask = stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Decode [1 0]", "00".repeat(4))
+        val c = "q 200 0 0 100 72 600 cm /Im1 Do Q\nBT /F1 10 Tf 72 560 Td (A caption.) Tj ET"
+        val out = File.createTempFile("mask", ".docx").apply { deleteOnExit() }
+        PdfConverter.convert(TestPdf.page(c, mapOf("F1" to "Helvetica"), listOf(image, mask), xobjects = "/Im1 6 0 R"), out, ConvertFormat.DOCX)
+        ZipFile(out).use { z ->
+            val media = z.entries().toList().single { it.name.startsWith("word/media/") }
+            val bytes = z.getInputStream(media).readBytes()
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val px = bmp.getPixel(bmp.width / 2, bmp.height / 2)
+            assertEquals(Integer.toHexString(px), 0xFFFF0000.toInt(), px)
+        }
+    }
+
+    @Test
     fun `a slide's text is set where it was, in frames`() {
         // A 16:9 slide: a title, and two labels on either side.
         val c = "BT /F1 28 Tf 60 470 Td (A slide title) Tj ET\n" +
