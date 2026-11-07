@@ -27,9 +27,10 @@ class PdfLimitsTest {
     }
 
     /** One page drawing [content] with [resources]; [extra] objects numbered from 5. */
-    private fun page(content: String, resources: String, extra: List<ByteArray>): File {
+    private fun page(content: String, resources: String, extra: List<ByteArray>, size: Int = 0): File {
+        val box = if (size > 0) "0 0 $size $size" else "0 0 612 792"
         val objs = listOf(obj("<< /Type /Catalog /Pages 2 0 R >>"), obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-            obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources $resources /Contents 4 0 R >>"), stream("", obj(content))) + extra
+            obj("<< /Type /Page /Parent 2 0 R /MediaBox [$box] /Resources $resources /Contents 4 0 R >>"), stream("", obj(content))) + extra
         val out = ByteArrayOutputStream()
         out.write("%PDF-1.7\n".toByteArray())
         val offsets = objs.mapIndexed { i, o -> out.size().also { out.write("${i + 1} 0 obj\n".toByteArray()); out.write(o); out.write("\nendobj\n".toByteArray()) } }
@@ -126,5 +127,19 @@ class PdfLimitsTest {
             assertTrue(ole.hasStream("BinData/BIN0001.png"))
             assertTrue(!ole.hasStream("BinData/BIN0002.png"))
         }
+    }
+
+    @Test
+    fun `letters scattered over a large page are laid out in time`() {
+        // Each letter its own line and block: every line was compared with every block, and each block with all the others.
+        val r = java.util.Random(7)
+        val text = (0 until 3000).joinToString(" ") { "BT /F1 10 Tf ${r.nextInt(14000)} ${r.nextInt(14000)} Td (a) Tj ET" }
+        val f = page(text, "<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>", emptyList(), size = 14400)
+        val out = File.createTempFile("scatter", ".docx").apply { deleteOnExit() }
+        val t0 = System.nanoTime()
+        PdfConverter.convert(f, out, ConvertFormat.DOCX)
+        val s = (System.nanoTime() - t0) / 1e9
+        // (About five seconds; it took minutes.)
+        assertTrue("took $s s", s < 30)
     }
 }

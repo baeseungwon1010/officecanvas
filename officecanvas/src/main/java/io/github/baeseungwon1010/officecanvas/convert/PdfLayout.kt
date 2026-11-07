@@ -572,19 +572,34 @@ internal object PdfLayout {
                 hi - lo > l.size * 0.5 && left >= 2 && right >= 2
             }
         }
+        // Lines come in baseline order, so a block whose last line is far above can't take another:
+        // only the blocks near enough are looked at, and each block's extent is kept as it grows.
+        val maxSize = lines.maxOfOrNull { it.size } ?: 0.0
+        val reach = maxSize * 4 + 1
+        val active = ArrayList<MutableList<Line>>()
+        // Per block: least x0, greatest x1, least and greatest center, greatest x0.
+        val ext = java.util.IdentityHashMap<MutableList<Line>, DoubleArray>()
+        fun grow(b: MutableList<Line>, l: Line) {
+            val c = (l.x0 + l.x1) / 2
+            val e = ext.getOrPut(b) { doubleArrayOf(l.x0, l.x1, c, c, l.x0) }
+            e[0] = min(e[0], l.x0); e[1] = max(e[1], l.x1); e[2] = min(e[2], c); e[3] = max(e[3], c); e[4] = max(e[4], l.x0)
+        }
         for (l in lines.sortedWith(compareBy<Line> { it.baseline }.thenBy { it.x0 })) {
             var target: MutableList<Line>? = null
-            for (b in blocks.asReversed()) {
+            active.removeAll { it.last().baseline < l.baseline - reach }
+            for (b in active.asReversed()) {
                 val last = b.last()
+                val e = ext.getValue(b)
                 val gap = l.top - last.bottom
-                val overlap = min(l.x1, b.maxOf { it.x1 }) - max(l.x0, b.minOf { it.x0 })
+                val overlap = min(l.x1, e[1]) - max(l.x0, e[0])
                 val sizeOk = l.size / last.size in 0.7..1.43
                 // Another piece of a line in this block (after a wide gap, a tab) joins it, but not a
                 // column's line beside the other column's (a bullet or a number beside its text leaves a
                 // gap down the list too, but has no column on its left). Far apart, only after a short
                 // piece (a table's rows without rulings) or up to the text's right edge (a right tab
                 // stop), not after a paragraph's line (a caption beside it).
-                val sameRow = b.any { o ->
+                // (The block's lines are in baseline order: only those at its end can share this line's row.)
+                val sameRow = b.asReversed().asSequence().takeWhile { o -> o.baseline > l.baseline - maxSize * 0.3 - 1 }.any { o ->
                     abs(o.baseline - l.baseline) < o.size * 0.3 && o.x1 <= l.x0 + o.size && run {
                         val far = l.x0 - o.x1 >= max(o.size, l.size) * 6
                         (!far || o.x1 - o.x0 < o.size * 15 || l.x1 > textRight - l.size) &&
@@ -595,19 +610,18 @@ internal object PdfLayout {
                 if (abs(l.baseline - last.baseline) < last.size * 0.3) continue
                 // A line under a row of separate labels (under pictures), reaching under another of them, follows none
                 // (raised or lowered pieces of a formula, smaller than the line, aren't labels).
-                val underRow = last.size > l.size * 0.8 &&
-                    blocks.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
+                fun underRow() = last.size > l.size * 0.8 &&
+                    active.any { o -> o !== b && abs(o.last().baseline - last.baseline) < last.size * 0.3 && l.x0 < o.last().x1 && l.x1 > o.last().x0 }
                 // Left-aligned text under centered lines (an author's name and address) starts another block: a line
                 // off the block's center, starting well left of it, or under lines centered on one another.
-                val bx0 = b.minOf { it.x0 }; val bx1 = b.maxOf { it.x1 }
-                val centers = b.map { (it.x0 + it.x1) / 2 }
-                val stacked = b.size >= 2 && centers.max() - centers.min() < l.size * 0.5 && b.maxOf { it.x0 } - bx0 > l.size
+                val bx0 = e[0]; val bx1 = e[1]
+                val stacked = b.size >= 2 && e[3] - e[2] < l.size * 0.5 && e[4] - bx0 > l.size
                 val offCenter = abs((l.x0 + l.x1) / 2 - (bx0 + bx1) / 2) > l.size
                 val outLeft = offCenter && (stacked || l.x0 < bx0 - l.size * 2)
-                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !underRow && !outLeft) { target = b; break }
-                if (l.top - b.last().bottom > l.size * 3) continue
+                if (gap < max(l.size, last.size) * 1.0 && gap > -last.size * 0.5 && overlap > -l.size * 0.5 && sizeOk && !outLeft && !underRow()) { target = b; break }
             }
-            if (target == null) blocks += mutableListOf(l) else target += l
+            if (target == null) { target = mutableListOf(l); blocks += target; active += target } else target += l
+            grow(target, l)
         }
         // Lines in rows (pieces of one line, after a gap, share its row), each row in x order.
         return blocks.map { b ->
@@ -994,8 +1008,11 @@ internal object PdfLayout {
      */
     private fun streamTables(lines: List<Line>, hs: List<Ruling>, content: PdfPageContent): List<TableGrid> {
         fun ink(l: Line) = l.chars.filter { !it.isSpace && it.text.isNotBlank() }
-        fun inkX0(l: Line) = ink(l).minOfOrNull { it.x } ?: l.x0
-        fun inkX1(l: Line) = ink(l).maxOfOrNull { it.x + it.width } ?: l.x1
+        // (Asked for again and again as runs of rows are tried: worked out once a line.)
+        val inkEdges = java.util.IdentityHashMap<Line, DoubleArray>()
+        fun edges(l: Line) = inkEdges.getOrPut(l) { ink(l).let { k -> doubleArrayOf(k.minOfOrNull { it.x } ?: l.x0, k.maxOfOrNull { it.x + it.width } ?: l.x1) } }
+        fun inkX0(l: Line) = edges(l)[0]
+        fun inkX1(l: Line) = edges(l)[1]
         val rows = ArrayList<MutableList<Line>>()
         for (l in lines.filter { l -> l.chars.all { abs(it.angle) < 3 } }.sortedBy { it.baseline }) {
             val last = rows.lastOrNull()
@@ -1044,12 +1061,22 @@ internal object PdfLayout {
         val x0 = pieces.minOf { inkX0(it) }; val x1 = pieces.maxOf { inkX1(it) }
         // Columns: where no row's text is, an em or more wide.
         val bins = ((x1 - x0) * 2).toInt().coerceIn(1, 20_000)
-        val cover = IntArray(bins)
+        // How many rows have text over each half point: each row's pieces merged, then counted with a running sum.
+        val diff = IntArray(bins + 1)
         for (r in multi) {
-            val hit = BooleanArray(bins)
-            for (l in r) for (b in ((inkX0(l) - x0) * 2).toInt().coerceIn(0, bins - 1)..((inkX1(l) - x0) * 2).toInt().coerceIn(0, bins - 1)) hit[b] = true
-            for (b in 0 until bins) if (hit[b]) cover[b]++
+            val spans = r.map { l -> ((inkX0(l) - x0) * 2).toInt().coerceIn(0, bins - 1) to ((inkX1(l) - x0) * 2).toInt().coerceIn(0, bins - 1) }
+                .filter { it.first <= it.second }.sortedBy { it.first }
+            var s0 = -1; var e0 = -1
+            for ((s, e) in spans) {
+                if (s0 >= 0 && s <= e0 + 1) { e0 = max(e0, e); continue }
+                if (s0 >= 0) { diff[s0]++; diff[e0 + 1]-- }
+                s0 = s; e0 = e
+            }
+            if (s0 >= 0) { diff[s0]++; diff[e0 + 1]-- }
         }
+        val cover = IntArray(bins)
+        var running = 0
+        for (b in 0 until bins) { running += diff[b]; cover[b] = running }
         val seps = ArrayList<Double>()
         var b = 0
         while (b < bins) {
