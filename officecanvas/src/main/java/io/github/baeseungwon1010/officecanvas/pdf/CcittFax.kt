@@ -12,7 +12,8 @@ internal object CcittFax {
     fun decode(data: ByteArray, k: Int, columns: Int, rows: Int, blackIs1: Boolean, byteAlign: Boolean): ByteArray? {
         if (columns <= 0 || columns > 1 shl 16) return null
         val rowBytes = (columns + 7) / 8
-        val maxRows = if (rows > 0) rows else (data.size.toLong() * 8).coerceAtMost(1L shl 16).toInt()
+        // Without a row count, as many as fit 64 MB (one bit of Group 4 data can code a whole row).
+        val maxRows = if (rows > 0) rows else ((64L shl 20) / rowBytes).coerceAtMost(data.size.toLong() * 8).coerceAtMost(1L shl 16).toInt()
         val out = java.io.ByteArrayOutputStream()
         val bits = Bits(data)
         // Changing elements: where a run of the other color starts. The reference line starts all white.

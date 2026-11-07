@@ -121,7 +121,12 @@ internal object PdfImages {
         if (codec == "CCITTFaxDecode") {
             fun int(k: String, default: Int) = doc.num(parms?.get(k))?.toInt() ?: default
             fun bool(k: String) = (doc.resolve(parms?.get(k)) as? PdfBool)?.value == true
-            data = CcittFax.decode(raw, int("K", 0), int("Columns", w), int("Rows", h), bool("BlackIs1"), bool("EncodedByteAlign")) ?: return null
+            // As many rows as the picture has, each its width: the fax data's own Rows and Columns
+            // aren't trusted with how much is decoded (one bit can code a whole row).
+            val columns = int("Columns", 1728)
+            if (columns <= 0 || columns.toLong() * h > MAX_PIXELS) return null
+            val rows = CcittFax.decode(raw, int("K", 0), columns, h, bool("BlackIs1"), bool("EncodedByteAlign")) ?: return null
+            data = if (columns == w) rows else repack(rows, columns, w, h, white = if (bool("BlackIs1")) 0 else 1)
         } else if (codec != null) return null
         val mask = (doc.resolve(d["ImageMask"]) as? PdfBool)?.value == true
         val bpc = if (mask || codec == "CCITTFaxDecode") 1 else (doc.num(d["BitsPerComponent"])?.toInt() ?: 8).coerceIn(1, 16)
@@ -172,7 +177,7 @@ internal object PdfImages {
         }
         val out = ByteArray(ow * oh * if (alpha != null) 4 else 3)
         for (y in 0 until oh) for (x in 0 until ow) {
-            val rgb = colors[(y * h / oh) * w + x * w / ow]
+            val rgb = colors[(y.toLong() * h / oh).toInt() * w + (x.toLong() * w / ow).toInt()]
             val o = (y * ow + x) * if (alpha != null) 4 else 3
             out[o] = (rgb shr 16).toByte(); out[o + 1] = (rgb shr 8).toByte(); out[o + 2] = rgb.toByte()
             if (alpha != null) out[o + 3] = alpha[y * ow + x]
@@ -198,6 +203,18 @@ internal object PdfImages {
         return true
     }
 
+    /** One-bit rows [from] pixels wide as rows [to] wide: cut, or filled out with [white]. */
+    private fun repack(rows: ByteArray, from: Int, to: Int, h: Int, white: Int): ByteArray {
+        val src = (from + 7) / 8; val dst = (to + 7) / 8
+        val out = ByteArray(dst * h) { if (white == 1) -1 else 0 }
+        for (y in 0 until h) for (x in 0 until minOf(from, to)) {
+            val bit = (rows[y * src + x / 8].toInt() shr (7 - x % 8)) and 1
+            val i = y * dst + x / 8
+            out[i] = if (bit == 1) (out[i].toInt() or (0x80 ushr (x % 8))).toByte() else (out[i].toInt() and (0x80 ushr (x % 8)).inv()).toByte()
+        }
+        return out
+    }
+
     private fun sample(data: ByteArray, rowStart: Int, bitPos: Long, bpc: Int): Int {
         if (bpc == 8) { val i = rowStart + bitPos.toInt() / 8; return if (i < data.size) data[i].toInt() and 0xFF else 0 }
         if (bpc == 16) { val i = rowStart + bitPos.toInt() / 8; return if (i + 1 < data.size) ((data[i].toInt() and 0xFF) shl 8) or (data[i + 1].toInt() and 0xFF) else 0 }
@@ -221,7 +238,7 @@ internal object PdfImages {
         val range = doc.array(s.dict["Decode"])?.items?.mapNotNull { doc.num(it) }?.takeIf { it.size >= 2 }
         val d0 = range?.get(0) ?: 0.0; val d1 = range?.get(1) ?: 1.0
         return ByteArray(w * h) { i ->
-            val x = (i % w) * mw / w; val y = (i / w) * mh / h
+            val x = ((i % w).toLong() * mw / w).toInt(); val y = ((i / w).toLong() * mh / h).toInt()
             val v = d0 + sample(dec.bytes, y * rowBytes, x.toLong() * bpc, bpc).toDouble() / maxV * (d1 - d0)
             (v.coerceIn(0.0, 1.0) * 255 + 0.5).toInt().toByte()
         }
