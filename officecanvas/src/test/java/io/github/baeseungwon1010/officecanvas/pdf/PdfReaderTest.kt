@@ -19,6 +19,18 @@ class PdfReaderTest {
     }
 
     @Test
+    fun `CMYK colors come out as printed`() {
+        fun rgb(c: Int) = Triple(c shr 16 and 0xFF, c shr 8 and 0xFF, c and 0xFF)
+        assertEquals(Triple(255, 255, 255), rgb(PdfPageReader.cmyk(0.0, 0.0, 0.0, 0.0)))
+        // Process cyan is a sky blue (other readers draw it about 0, 173, 239), not 0, 255, 255.
+        val (r, g, b) = rgb(PdfPageReader.cmyk(1.0, 0.0, 0.0, 0.0))
+        assertTrue("$r $g $b", r < 20 && g in 160..200 && b > 225)
+        // Full black ink is a little short of black.
+        val (kr, kg, kb) = rgb(PdfPageReader.cmyk(0.0, 0.0, 0.0, 1.0))
+        assertTrue("$kr $kg $kb", kr in 20..60 && kg in 20..60 && kb in 20..60)
+    }
+
+    @Test
     fun `reads every page's text through its fonts`() {
         val pages = pagesText("sample.pdf")
         assertEquals(3, pages.size)
