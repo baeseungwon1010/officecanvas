@@ -46,4 +46,25 @@ class PdfDrawingTest {
             assertEquals(Integer.toHexString(px), 0xFFFF0000.toInt(), px)
         }
     }
+
+    @Test
+    fun `a slide's text is set where it was, in frames`() {
+        // A 16:9 slide: a title, and two labels on either side.
+        val c = "BT /F1 28 Tf 60 470 Td (A slide title) Tj ET\n" +
+            "BT /F1 14 Tf 80 250 Td (Left label) Tj ET\n" +
+            "BT /F1 14 Tf 700 120 Td (Right label) Tj ET"
+        val out = File.createTempFile("slide", ".docx").apply { deleteOnExit() }
+        PdfConverter.convert(TestPdf.page(c, mapOf("F1" to "Helvetica"), width = 960, height = 540), out, ConvertFormat.DOCX)
+        val xml = ZipFile(out).use { z -> String(z.getInputStream(z.getEntry("word/document.xml")).readBytes()) }
+        val frames = Regex("<w:framePr [^>]*w:x=\"(\\d+)\" w:y=\"(\\d+)\"").findAll(xml).map { it.groupValues[1].toInt() / 20.0 to it.groupValues[2].toInt() / 20.0 }.toList()
+        assertEquals(xml, 3, frames.size)
+        // The right label: its line near 540 - 120 pt from the top, its text indented to x = 700 pt in its frame.
+        val right = Regex("<w:p>((?:(?!</w:p>).)*Right label(?:(?!</w:p>).)*)</w:p>").find(xml)!!.groupValues[1]
+        val y = Regex("<w:framePr [^>]*w:y=\"(\\d+)\"").find(right)!!.groupValues[1].toInt() / 20.0
+        val x = Regex("<w:framePr [^>]*w:x=\"(\\d+)\"").find(right)!!.groupValues[1].toInt() / 20.0
+        val w = Regex("<w:framePr w:w=\"(\\d+)\"").find(right)!!.groupValues[1].toInt() / 20.0
+        val indent = Regex("<w:ind w:left=\"(\\d+)\"").find(right)!!.groupValues[1].toInt() / 20.0
+        // (Indented to it, or set against the frame's right edge where the label ends.)
+        assertTrue(right, y in 390.0..420.0 && (x + indent in 695.0..705.0 || "<w:jc w:val=\"right\"/>" in right && x + w in 760.0..780.0))
+    }
 }

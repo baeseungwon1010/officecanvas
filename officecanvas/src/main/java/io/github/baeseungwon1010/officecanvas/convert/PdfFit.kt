@@ -64,6 +64,20 @@ internal object PdfFit {
         }
     }
 
+    /**
+     * [page] with its blocks set where they lie on the PDF's page; tables without a line or a fill
+     * (columns side by side, labels around a drawing) give up their parts, each set in its place.
+     */
+    fun fixed(page: ConvPage): ConvPage = ConvPage(
+        page.width, page.height, page.marginLeft, page.marginRight, page.marginTop, page.marginBottom,
+        page.blocks.flatMap { unwrap(it) }, page.floating, page.header, page.headerTop, page.footer, page.footerBottom, fixed = true
+    )
+
+    private fun unwrap(b: ConvBlock): List<ConvBlock> =
+        if (b is ConvTable && b.cells.all { c -> c.top == null && c.bottom == null && c.left == null && c.right == null && c.fill == null } &&
+            b.cells.all { c -> c.blocks.all { it.at != null } }) b.cells.flatMap { c -> c.blocks.flatMap { unwrap(it) } }
+        else listOf(b)
+
     /** Steps: lines, space and rows this much as tall, and text this many percent as wide. */
     private val HEIGHT = doubleArrayOf(0.9, 0.8, 0.72)
     private val WIDTH = intArrayOf(100, 95, 90)
@@ -89,10 +103,10 @@ internal object PdfFit {
                 ConvRun(r.text, r.font, r.size, r.bold, r.italic, r.underline, r.color, r.script, r.field, r.spacing, max(50, r.scale * width / 100), r.mono, r.serif)
             }
             ConvParagraph(runs, b.align, b.leftIndent, b.rightIndent, b.firstLine, b.spaceBefore * f,
-                b.lineHeight?.let { max(it * f, size * 1.05) }, b.image, b.tabs, b.shading, b.rightTabs)
+                b.lineHeight?.let { max(it * f, size * 1.05) }, b.image, b.tabs, b.shading, b.rightTabs).also { it.at = b.at }
         }
         is ConvTable -> ConvTable(b.x, b.colWidths, b.rowHeights.map { it * f },
             b.cells.map { c -> ConvCell(c.row, c.col, c.rowSpan, c.colSpan, c.blocks.map { tighten(it, f, width) }, c.fill, c.top, c.bottom, c.left, c.right, c.vAlign) },
-            b.spaceBefore * f)
+            b.spaceBefore * f).also { it.at = b.at }
     }
 }

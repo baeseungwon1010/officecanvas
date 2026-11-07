@@ -178,13 +178,14 @@ internal object PdfLayout {
                         var first = true
                         for ((para, bounds) in paras) {
                             val before = if (first) (bounds.first - prevBottom).coerceAtLeast(0.0) else para.spaceBefore
-                            blocks += if (first) para.withSpaceBefore(before) else para
+                            blocks += (if (first) para.withSpaceBefore(before) else para).also { it.at = doubleArrayOf(x0, bounds.first, x1, bounds.second) }
                             prevBottom = bounds.second
                             first = false
                         }
                     }
                     is Item.Grid -> {
                         blocks += item.table.build(x0, x1, rulings, (item.table.y0 - prevBottom).coerceAtLeast(0.0))
+                            .also { it.at = doubleArrayOf(item.table.x0, item.table.y0, item.table.x1, item.table.y1) }
                         prevBottom = item.table.y1
                     }
                     is Item.Picture -> {
@@ -193,6 +194,7 @@ internal object PdfLayout {
                         val center = abs((p.x + p.width / 2) - (x0 + x1) / 2) < 6 && p.x - x0 > 10
                         blocks += ConvParagraph(emptyList(), if (center) ConvAlign.CENTER else ConvAlign.LEFT,
                             leftIndent = if (center) 0.0 else (p.x - x0).coerceAtLeast(0.0), spaceBefore = (p.y - prevBottom).coerceAtLeast(0.0), image = img)
+                            .also { it.at = doubleArrayOf(if (center) x0 else p.x, p.y, if (center) x1 else p.x + p.width, p.y + p.height) }
                         prevBottom = p.y + p.height
                     }
                     is Item.Columns -> {
@@ -205,7 +207,7 @@ internal object PdfLayout {
                             ConvCell(0, k, 1, 1, flow(part, edges[k] + 1.5, edges[k + 1] - 1.5, item.y0))
                         }
                         blocks += ConvTable(0.0, (0 until item.parts.size).map { edges[it + 1] - edges[it] }, listOf(item.y1 - item.y0), cells,
-                            (item.y0 - prevBottom).coerceAtLeast(0.0))
+                            (item.y0 - prevBottom).coerceAtLeast(0.0)).also { it.at = doubleArrayOf(x0, item.y0, edges.last(), item.y1) }
                         prevBottom = item.y1
                     }
                 }
@@ -876,7 +878,7 @@ internal object PdfLayout {
                 for (b in blocks(inside)) {
                     var first = true
                     for ((p, bounds) in paragraphs(b, cx0 + 1.5, cx1 - 1.5, rulings)) {
-                        placed += bounds.first to if (first) p.withSpaceBefore(0.0) else p
+                        placed += bounds.first to (if (first) p.withSpaceBefore(0.0) else p).also { it.at = doubleArrayOf(cx0 + 1.5, bounds.first, cx1 - 1.5, bounds.second) }
                         first = false
                     }
                 }

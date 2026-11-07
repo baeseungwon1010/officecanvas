@@ -140,7 +140,7 @@ object PdfConverter {
                     else -> if (serif > sans) "Times New Roman" else "Arial"
                 }
                 // Pages as laid out, [tight]er where that was needed, [mark]ed for PdfFit.
-                fun write(sink: PageSink, tight: Map<Int, Int>, mark: Boolean) {
+                fun write(sink: PageSink, tight: Map<Int, Int>, fixed: Set<Int>, mark: Boolean) {
                     for ((i, p) in pages.withIndex()) {
                         val c = reader.read(p)
                         val pictures = c.pictures.mapNotNull { pic ->
@@ -149,7 +149,12 @@ object PdfConverter {
                             pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || pic.drawing || PdfLayout.placeKey(pic) in decorations) }
                         }
                         var page = PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1)
-                        tight[i]?.let { step -> page = PdfFit.tighten(page, step) }
+                        // A page that runs over however tight is set at fixed places in a Word file, as tight as it goes in Hangul's.
+                        // A slide (a page much wider than tall) is a designed page: in a Word file its blocks stay where they are.
+                        val slide = page.width > page.height * 1.2
+                        if (slide && format == ConvertFormat.DOCX && !mark) page = PdfFit.fixed(page)
+                        else if (i in fixed) page = if (format == ConvertFormat.DOCX) PdfFit.fixed(page) else PdfFit.tighten(page, PdfFit.STEPS)
+                        else tight[i]?.let { step -> page = PdfFit.tighten(page, step) }
                         if (mark) page = PdfFit.marked(page, i)
                         sink.page(page)
                     }
@@ -158,17 +163,19 @@ object PdfConverter {
                 // Each PDF page should stay one page: laid out as a word processor would, pages whose
                 // text runs onto the next are set tighter, a step at a time.
                 val tight = HashMap<Int, Int>()
-                if (pages.size <= MAX_FIT_PAGES) for (round in 0 until PdfFit.STEPS) {
-                    val spill = PdfFit.spilling(font) { write(it, tight, mark = true) }
+                var fixed = emptySet<Int>()
+                if (pages.size <= MAX_FIT_PAGES) for (round in 0..PdfFit.STEPS) {
+                    val spill = PdfFit.spilling(font) { write(it, tight, emptySet(), mark = true) }
                     if (spill.isEmpty()) break
-                    for (i in spill) tight[i] = (tight[i] ?: 0) + 1
+                    if (round == PdfFit.STEPS) fixed = spill
+                    else for (i in spill) tight[i] = (tight[i] ?: 0) + 1
                 }
                 val sink: PageSink = when (format) {
                     ConvertFormat.DOCX -> DocxWriter(output, font)
                     ConvertFormat.HWPX -> HwpxWriter(output, font)
                     ConvertFormat.HWP -> HwpWriter(output, font)
                 }
-                write(sink, tight, mark = false)
+                write(sink, tight, fixed, mark = false)
                 return pages.size
             }
         } catch (e: OfficeCanvasException) {

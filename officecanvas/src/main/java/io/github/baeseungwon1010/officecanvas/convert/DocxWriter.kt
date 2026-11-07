@@ -46,14 +46,22 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
         // Space before a page's first paragraph is dropped at the top of a page (LibreOffice drops it;
         // a picture floating above would have the text run over it), so a paragraph that tall holds it.
         val head = page.blocks.firstOrNull()
-        val lead = (head as? ConvParagraph)?.spaceBefore?.takeIf { it > 2 }
-        if (head !is ConvParagraph || lead != null) {
+        val lead = (head as? ConvParagraph)?.spaceBefore?.takeIf { it > 2 && !page.fixed }
+        if (head !is ConvParagraph || lead != null || page.fixed) {
             body.append("<w:p><w:pPr>")
             if (!broke) body.append("<w:pageBreakBefore/>")
             body.append("<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"${tw((lead ?: 1.0).coerceIn(1.0, 1500.0))}\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/></w:rPr></w:pPr>")
             body.append(anchors).append("</w:p>")
             anchors = ""
             broke = true
+        }
+        if (page.fixed) {
+            // Each block where it lies on the page: paragraphs in frames, then tables floating. Frames hang
+            // on the paragraph after them, so one follows them on this page, before any table could push it on.
+            for (b in page.blocks) if (b is ConvParagraph) paragraph(if (b.at != null) b.withSpaceBefore(0.0) else b, frame = b.at)
+            spacer(1.0)
+            for (b in page.blocks) if (b is ConvTable) { table(b, b.at); spacer(1.0) }
+            return
         }
         for ((k, b) in page.blocks.withIndex()) {
             when (b) {
@@ -121,9 +129,14 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
 
     // ---- paragraphs ----
 
-    private fun paragraph(p: ConvParagraph, pageBreak: Boolean = false, extra: String = "") {
+    private fun paragraph(p: ConvParagraph, pageBreak: Boolean = false, extra: String = "", frame: DoubleArray? = null) {
         body.append("<w:p><w:pPr>")
         if (pageBreak) body.append("<w:pageBreakBefore/>")
+        // A frame at a place on the page, as tall as its text needs.
+        frame?.let { f ->
+            body.append("<w:framePr w:w=\"${tw((f[2] - f[0]).coerceAtLeast(2.0))}\" w:h=\"${tw((f[3] - f[1]).coerceAtLeast(1.0))}\" w:hRule=\"atLeast\" ")
+            body.append("w:x=\"${tw(f[0].coerceAtLeast(0.0))}\" w:y=\"${tw(f[1].coerceAtLeast(0.0))}\" w:hAnchor=\"page\" w:vAnchor=\"page\" w:wrap=\"around\"/>")
+        }
         if (p.tabs.isNotEmpty() || p.rightTabs.isNotEmpty()) {
             body.append("<w:tabs>")
             for ((t, right) in (p.tabs.map { it to false } + p.rightTabs.map { it to true }).sortedBy { it.first }.take(30))
@@ -193,9 +206,15 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
 
     // ---- tables ----
 
-    private fun table(t: ConvTable) {
+    private fun table(t: ConvTable, at: DoubleArray? = null) {
         val total = t.colWidths.sum()
-        body.append("<w:tbl><w:tblPr><w:tblW w:w=\"${tw(total)}\" w:type=\"dxa\"/><w:tblInd w:w=\"${tw(t.x)}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/>")
+        body.append("<w:tbl><w:tblPr>")
+        // Floating at a place on the page.
+        at?.let { a ->
+            body.append("<w:tblpPr w:leftFromText=\"0\" w:rightFromText=\"0\" w:topFromText=\"0\" w:bottomFromText=\"0\" w:vertAnchor=\"page\" w:horzAnchor=\"page\" ")
+            body.append("w:tblpX=\"${tw(a[0].coerceAtLeast(0.0))}\" w:tblpY=\"${tw(a[1].coerceAtLeast(0.0))}\"/><w:tblOverlap w:val=\"overlap\"/>")
+        }
+        body.append("<w:tblW w:w=\"${tw(total)}\" w:type=\"dxa\"/><w:tblInd w:w=\"${tw(if (at != null) 0.0 else t.x)}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/>")
         body.append("<w:tblCellMar><w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"30\" w:type=\"dxa\"/><w:bottom w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"30\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr><w:tblGrid>")
         for (w in t.colWidths) body.append("<w:gridCol w:w=\"${tw(w)}\"/>")
         body.append("</w:tblGrid>")

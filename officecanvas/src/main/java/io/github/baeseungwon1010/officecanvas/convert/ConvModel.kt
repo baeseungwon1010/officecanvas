@@ -15,12 +15,17 @@ internal class ConvPage(
     val floating: List<ConvImage> = emptyList(),
     /** Text repeated at the top and bottom of the pages, and how far it is from the page's edge. */
     val header: List<ConvParagraph> = emptyList(), val headerTop: Double = 0.0,
-    val footer: List<ConvParagraph> = emptyList(), val footerBottom: Double = 0.0
+    val footer: List<ConvParagraph> = emptyList(), val footerBottom: Double = 0.0,
+    /** Each block set where [ConvBlock.at] says rather than one after another (a page that wouldn't fit flowing). */
+    val fixed: Boolean = false
 )
 
 internal enum class ConvAlign { LEFT, CENTER, RIGHT, JUSTIFY }
 
-internal sealed class ConvBlock
+internal sealed class ConvBlock {
+    /** Where it lies on the page (left, top, right, bottom), for a page set at fixed places ([ConvPage.fixed]). */
+    var at: DoubleArray? = null
+}
 
 internal class ConvParagraph(
     val runs: List<ConvRun>,
