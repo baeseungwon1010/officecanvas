@@ -1,7 +1,8 @@
 # Architecture
 
 ```
-OfficeCanvas.render(context, file)
+OfficeCanvas.open(context, file) → OfficeDocument.drawPage(i, canvas)
+OfficeCanvas.render(context, file)   (open, then each page drawn into a bitmap)
         │  DocumentFormat.detect: zip with ppt/presentation.xml → PPTX
         │                         zip with Contents/content.hpf → HWPX
         │                         zip with word/document.xml → DOCX
@@ -9,12 +10,12 @@ OfficeCanvas.render(context, file)
         │                         OLE2 with an "HWP Document File" header → HWP
         │                         XML with an <HWPML> root → HWP (laid out here)
         ├── PPTX ── pptx.PptxParser ──┐
-        ├── PPT ─── ppt.PptParser ────┼──► slide.Deck ──► slide.SlideRenderer ──► Bitmap per slide
+        ├── PPT ─── ppt.PptParser ────┼──► slide.Deck ──► slide.SlideRenderer.Pages ──► Canvas
         │                             │                        └── metafile.EmfRenderer / WmfRenderer
         ├── HWPX ── hwpx.HwpxParser ──┐
         ├── HWP ─── hwp.HwpParser ────┤
         ├── HWPML ─ hwp.HwpmlParser ──┤   (HWPML and DOCX laid out with hwpx.TextFlow)
-        └── DOCX ── docx.DocxParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer ──► Bitmap per page
+        └── DOCX ── docx.DocxParser ──┴──► hwpx.HwpxDoc ──► hwpx.HwpxRenderer.Pages ──► Canvas
 
 PdfConverter.convert(pdf, output, format)
         pdf.PdfDocument ──► pdf.PdfPageReader ──► convert.PdfLayout ──► convert.ConvPage ──┬──► DocxWriter ──► .docx
@@ -23,13 +24,19 @@ PdfConverter.convert(pdf, output, format)
            pages)              pictures)            paragraphs)            pictures)
 ```
 
-Everything except `OfficeCanvas`, `PdfConverter`, `ConvertFormat`, `DocumentFormat` and `OfficeCanvasException` is `internal`. The converter uses no Android APIs.
+Everything except `OfficeCanvas`, `OfficeDocument`, `PdfConverter`, `ConvertFormat`, `DocumentFormat` and `OfficeCanvasException` is `internal`. The converter uses no Android APIs.
+
+## Drawing pages
+
+Both renderers are `util.PageSource`s: a parsed document whose pages draw onto any `Canvas`. A page is drawn in *reference pixels*, the page's long side 1600 px (`PageSource.REF_LONG_SIDE_PX`, the default `render` size), whatever size it ends up. Everything the renderers decide in pixels (text measured and broken into lines, a slide's auto-fit shrinking, an HWPX line squeezed into its column, rounding to whole pixels) is decided there, so it comes out the same at every size, and the canvas matrix takes the drawing to its real size: `OfficeDocument.drawPage` scales reference pixels to points under the caller's matrix, and `render` scales them to its bitmap (exactly 1:1 at 1600 px, which keeps those images pixel for pixel what drawing straight into the bitmap gave).
+
+What depends on the device rather than the page is read from the canvas matrix (`util.DeviceScale`): the thinnest a line may be (a device pixel, not a reference pixel that becomes 20 px at 20x), and the size a picture is decoded at. Elements that can't reach the clip are skipped (`quickReject` on generous bounds: turned, with outline, arrowheads and shadow); text boxes always draw, since their text can run past the box, but laid-out text is kept for the page drawn last (`SlideRenderer.Pages.texts`) and `StaticLayout` draws only the lines in the clip. Decoded pictures are kept in a `util.PictureCache` within a byte budget, at each size they were needed, and a lookup returns the decoding `SafeBitmaps` would have made for the size asked.
 
 ## Packages
 
 **`slide`**: the model both slide parsers produce, and the renderer that draws it.
 - `SlideModel.kt`: `Deck` → `Slide` → `Element` (`Shape`, `Picture`, `Table`). All geometry is in EMU (914400 per inch). Text is `TextBody` → `Paragraph` → `Run`. Parsing resolves every kind of inheritance (theme, layout, master, placeholder), so the renderer never looks anything up.
-- `SlideRenderer.kt`: draws a `Deck` onto `android.graphics.Canvas`, one slide at a time. Text is laid out with `StaticLayout`, but line height, paragraph spacing and font sizes follow PowerPoint's rules rather than Android's defaults (see FORMAT_NOTES).
+- `SlideRenderer.kt`: draws a `Deck` onto `android.graphics.Canvas`, one slide at a time (`SlideRenderer.Pages`). Text is laid out with `StaticLayout`, but line height, paragraph spacing and font sizes follow PowerPoint's rules rather than Android's defaults (see FORMAT_NOTES).
 - `OfficeFonts.kt`: loads the bundled fonts and maps a document's font name to Carlito (Calibri), Liberation Sans, Serif or Mono.
 
 **`pptx`**: the 2007+ XML format.
@@ -55,7 +62,7 @@ Everything except `OfficeCanvas`, `PdfConverter`, `ConvertFormat`, `DocumentForm
 - `Equation.kt` (`EquationParser`): Hangul's equation scripts as a tree; `EquationLayout`: that tree typeset with Android's text drawing, fitted to the box Hangul saved.
 - `Numbering.kt`: paragraph numbers and bullets, counted through the document and put in front of a paragraph's first line.
 - `PageDecor`: headers, footers and the page number for each page (odd and even, changing where their controls appear), and where an object placed relative to its paragraph goes.
-- `HwpxRenderer`: draws a page, placing spans by alignment within the width Hangul saved for the line.
+- `HwpxRenderer`: draws a page (`HwpxRenderer.Pages`), placing spans by alignment within the width Hangul saved for the line.
 
 **`hwp`**: `HwpParser` reads the binary Hangul 5.0 format (records in OLE2 streams) into the same model; pictures stay in the file until drawn, as in `.ppt` (`HwpxDoc.resources`). `HwpmlParser` reads HWPML, the older XML form of `.hwp`; it saves no layout, so it breaks lines itself, measuring spans with `HwpxRenderer.widthHu` (the faces and sizes the renderer draws with), and pages them through `PageFlow`.
 
@@ -71,11 +78,11 @@ Everything except `OfficeCanvas`, `PdfConverter`, `ConvertFormat`, `DocumentForm
 
 **`metafile`**: players for the vector picture formats Office uses, which `BitmapFactory` can't decode: `EmfRenderer` (EMF), `WmfRenderer` (WMF), `SvgRenderer` (the SVG subset of Office icons), plus `TiffDecoder` (TIFF to BMP) and `MetaText` (text drawn inside metafiles).
 
-**`util`**: `SafeXml` (XML parsing for untrusted parts: DTDs refused, hardening features requested one at a time because Android's parser rejects the ones it doesn't know, parts capped at 32 MB), `SafeBitmaps` (raster decoding with a pixel budget) and `Limits` (pages, nesting, input size).
+**`util`**: `SafeXml` (XML parsing for untrusted parts: DTDs refused, hardening features requested one at a time because Android's parser rejects the ones it doesn't know, parts capped at 32 MB), `SafeBitmaps` (raster decoding with a pixel budget), `PictureCache` (decoded pictures kept between draws), `DeviceScale` (pixel sizes from the canvas matrix), `PageSource` (a document's pages drawn onto any canvas) and `Limits` (pages, nesting, input size).
 
 ## Memory
 
-Each renderer draws a page, hands the bitmap to the caller and moves on. A 60-slide deck at 1600 px would be around 350 MB of bitmaps if they were collected into a list first. Large embedded photos are decoded with `inSampleSize` close to their drawn size.
+`render` draws a page, hands the bitmap to the caller and moves on. A 60-slide deck at 1600 px would be around 350 MB of bitmaps if they were collected into a list first. Large embedded photos are decoded with `inSampleSize` close to their drawn size on the device. An `OfficeDocument` holds its parsed model, the open file, decoded pictures up to its cache size (48 MB by default, 32 MB while `render` runs) and the text of one page; `close` releases them.
 
 ## Adding a feature
 

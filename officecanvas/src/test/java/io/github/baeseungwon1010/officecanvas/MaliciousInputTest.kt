@@ -60,8 +60,22 @@ class MaliciousInputTest {
         return thrown
     }
 
-    private fun render(file: File, longSide: Int = OfficeCanvas.DEFAULT_LONG_SIDE_PX, onPage: (Bitmap) -> Unit = {}) =
-        OfficeCanvas.render(RuntimeEnvironment.getApplication(), file, longSide) { _, b -> onPage(b); b.recycle() }
+    /** Renders [file], then draws the middle of its first pages zoomed in through [OfficeCanvas.open]: the same limits hold there. */
+    private fun render(file: File, longSide: Int = OfficeCanvas.DEFAULT_LONG_SIDE_PX, onPage: (Bitmap) -> Unit = {}): Int {
+        val pages = OfficeCanvas.render(RuntimeEnvironment.getApplication(), file, longSide) { _, b -> onPage(b); b.recycle() }
+        OfficeCanvas.open(RuntimeEnvironment.getApplication(), file).use { doc ->
+            val bitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+            for (i in 0 until minOf(doc.pageCount, 3)) {
+                val canvas = android.graphics.Canvas(bitmap)
+                val s = 8 * 1600f / maxOf(doc.pageWidthPt(i), doc.pageHeightPt(i))
+                canvas.translate(-doc.pageWidthPt(i) * s / 2, -doc.pageHeightPt(i) * s / 2)
+                canvas.scale(s, s)
+                doc.drawPage(i, canvas)
+            }
+            bitmap.recycle()
+        }
+        return pages
+    }
 
     private fun le(n: Int) = ByteBuffer.allocate(n).order(ByteOrder.LITTLE_ENDIAN)
     private fun temp(bytes: ByteArray, suffix: String) = File.createTempFile("evil", suffix).apply { writeBytes(bytes); deleteOnExit() }

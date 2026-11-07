@@ -28,6 +28,30 @@ val pageCount = OfficeCanvas.render(context, file) { index, bitmap ->
 - Anything that isn't a readable PPTX, PPT, DOCX, HWPX or HWP raises `OfficeCanvasException`. Password-protected and distribution-only (배포용) `.hwp` files are encrypted and not supported.
 - At most `OfficeCanvas.MAX_PAGES` (1000) pages are rendered.
 
+### Drawing a page at any size
+
+`render` makes whole pages at one size. To show a page sharp at any zoom, open the document once and draw just the part on screen whenever the view settles:
+
+```kotlin
+val doc = OfficeCanvas.open(context, file)          // parsed and laid out once; Closeable
+doc.pageCount
+doc.pageWidthPt(i); doc.pageHeightPt(i)              // page size in points (1/72 in)
+
+val bitmap = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888)
+val canvas = Canvas(bitmap)
+canvas.translate(-left, -top)                        // the visible part, in pixels at this zoom
+canvas.scale(pxPerPt, pxPerPt)                       // page points to pixels
+doc.drawPage(i, canvas)                              // only what reaches the clip is drawn
+
+doc.close()
+```
+
+- `drawPage` honours whatever matrix and clip the canvas has, and paints the page's area (white, or the slide's background) before drawing it.
+- Text is laid out at one fixed size whatever the drawing size, so lines break, justify and shrink to fit as in `render`'s images, and a region drawn at 6x lines up with the same region of the whole page. Hairlines stay about a device pixel thick at any zoom.
+- Pictures are decoded at the resolution they land at, and kept between draws in a cache of `pictureCacheBytes` (default 48 MB); the text laid out for the page drawn last is kept too, so drawing the same page again while zooming is quick.
+- Use a document from one thread at a time, off the main thread, and draw onto a bitmap-backed canvas. `close()` releases the file and the cached pictures.
+- `render` is built on the same drawing: a page drawn with `drawPage` at the size `render` gives comes out the same.
+
 ### Converting PDFs
 
 ```kotlin
@@ -183,7 +207,7 @@ LibreOffice is a reference, not ground truth. Where PowerPoint and LibreOffice d
 
 ## 한국어 소개
 
-OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·글상자·수식·각주·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. `PdfConverter`는 PDF를 고쳐 쓸 수 있는 DOCX·HWPX·HWP 문서로 바꿉니다. 글자를 글꼴의 인코딩으로 읽고, 줄·문단·표(병합된 칸과 테두리 포함)·그림·머리말과 꼬리말을 다시 짭니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.4`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
+OfficeCanvas는 PPTX·PPT·DOCX·HWPX·HWP 문서를 안드로이드 기기 안에서 바로 이미지로 그리는 Kotlin 라이브러리입니다. 변환 서버나 네이티브 라이브러리 없이 동작합니다. 슬라이드와 한글 문서는 도형·줄의 최종 위치가 파일 안에 저장되어 있어서, 워드프로세서의 레이아웃 엔진을 다시 구현하지 않고도 원본과 거의 같은 모양을 그릴 수 있습니다. HWPX와 HWP는 한글이 저장해 둔 줄 위치(`<hp:lineseg>`, `PARA_LINE_SEG`)와 쪽 나눔을 그대로 사용합니다. 줄 위치를 저장하지 않는 옛 XML 형식(HWPML)으로 저장된 `.hwp`는 직접 줄과 쪽을 나눠 그립니다. Word 문서(`.docx`)도 줄 위치를 저장하지 않으므로 스타일·번호 목록·표·그림·글상자·수식·각주·머리말과 꼬리말을 읽어 직접 줄과 쪽을 나눠 그립니다. `PdfConverter`는 PDF를 고쳐 쓸 수 있는 DOCX·HWPX·HWP 문서로 바꿉니다. 글자를 글꼴의 인코딩으로 읽고, 줄·문단·표(병합된 칸과 테두리 포함)·그림·머리말과 꼬리말을 다시 짭니다. JitPack 저장소를 추가하고 `com.github.baeseungwon1010:officecanvas:0.5.5`을 의존성으로 넣은 뒤, 위의 `OfficeCanvas.render` 한 줄로 사용합니다. 확대한 화면을 선명하게 다시 그리려면 `OfficeCanvas.open`으로 문서를 한 번 열어 두고 `drawPage`로 보이는 부분만 그 배율로 그립니다. 암호가 걸린 문서와 배포용 문서는 암호화되어 있어 열 수 없습니다.
 
 ## License
 
