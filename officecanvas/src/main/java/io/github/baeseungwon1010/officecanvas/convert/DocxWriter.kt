@@ -58,8 +58,16 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
         if (page.fixed) {
             // Each block where it lies on the page: paragraphs in frames, then tables floating. Frames hang
             // on the paragraph after them, so one follows them on this page, before any table could push it on.
-            for (b in page.blocks) if (b is ConvParagraph) paragraph(if (b.at != null) b.withSpaceBefore(0.0) else b, frame = b.at)
-            spacer(1.0)
+            // A picture standing alone floats there instead (in a frame, one as tall as the page ran over).
+            val alone = StringBuilder()
+            for (b in page.blocks) if (b is ConvParagraph) {
+                val at = b.at; val img = b.image
+                if (at != null && img != null && b.runs.isEmpty()) {
+                    val x = if (b.align == ConvAlign.CENTER) at[0] + (at[2] - at[0] - img.width) / 2 else at[0]
+                    alone.append(anchor(ConvImage(img.data, img.png, img.pixelWidth, img.pixelHeight, img.width, img.height, x, at[1])))
+                } else paragraph(if (at != null) b.withSpaceBefore(0.0) else b, frame = at)
+            }
+            body.append("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/></w:rPr></w:pPr>").append(alone).append("</w:p>")
             for (b in page.blocks) if (b is ConvTable) { table(b, b.at); spacer(1.0) }
             return
         }
