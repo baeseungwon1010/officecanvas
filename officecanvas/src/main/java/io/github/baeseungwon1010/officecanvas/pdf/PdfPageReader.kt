@@ -174,7 +174,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
 
         fun showText(bytes: ByteArray) {
             val font = gs.font ?: return
-            for (g in font.glyphs(bytes)) {
+            for (g in font.glyphs(bytes, MAX_CHARS - chars.size)) {
                 if (chars.size >= MAX_CHARS) return
                 val trm = Matrix(gs.size * gs.hScale, 0.0, 0.0, gs.size, 0.0, gs.rise).times(tm).times(gs.ctm).times(device)
                 val ox = trm.e; val oy = trm.f
@@ -300,7 +300,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
                     val name = (operands.getOrNull(0) as? PdfName)?.name
                     gs.size = num(1)
                     val ref = doc.dict(resources?.get("Font"))?.get(name ?: "")
-                    if (ref != null) gs.font = fonts.getOrPut(ref) { try { PdfFont.load(doc, ref) } catch (e: Exception) { null } }
+                    if (ref != null) gs.font = fonts.getOrPut(ref) { try { PdfFont.load(doc, ref) } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null } }
                 }
                 "Td" -> { tlm = Matrix(1.0, 0.0, 0.0, 1.0, num(0), num(1)).times(tlm); tm = tlm }
                 "TD" -> { gs.leading = -num(1); tlm = Matrix(1.0, 0.0, 0.0, 1.0, num(0), num(1)).times(tlm); tm = tlm }

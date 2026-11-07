@@ -18,10 +18,11 @@ internal class PdfCMap {
     val hasUnicode get() = unicode.isNotEmpty() || unicodeRanges.isNotEmpty()
     val hasCodespace get() = spaces.isNotEmpty()
 
-    /** Splits [bytes] into codes with their byte lengths. Without codespace ranges, [defaultLength] bytes each. */
-    fun codes(bytes: ByteArray, defaultLength: Int, out: (code: Long, length: Int) -> Unit) {
+    /** Splits [bytes] into (at most [limit]) codes with their byte lengths. Without codespace ranges, [defaultLength] bytes each. */
+    fun codes(bytes: ByteArray, defaultLength: Int, limit: Int = Int.MAX_VALUE, out: (code: Long, length: Int) -> Unit) {
         var i = 0
-        while (i < bytes.size) {
+        var n = 0
+        while (i < bytes.size && n++ < limit) {
             var len = 0
             if (spaces.isNotEmpty()) {
                 var v = 0L
@@ -41,16 +42,52 @@ internal class PdfCMap {
         }
     }
 
+    /** Codes no range has, so a string of them doesn't look through every range again (capped). */
+    private val noText = HashSet<Long>()
+    private val noCid = HashSet<Long>()
+    private var unicodeIndex: Ranges<String>? = null
+    private var cidIndex: Ranges<Int>? = null
+
     fun text(code: Long): String? {
         unicode[code]?.let { return it }
-        for ((lo, hi, start) in unicodeRanges) if (code in lo..hi) return offset(start, (code - lo).toInt()).also { unicode[code] = it }
-        return null
+        if (code in noText) return null
+        val index = unicodeIndex?.takeIf { it.size == unicodeRanges.size } ?: Ranges(unicodeRanges).also { unicodeIndex = it }
+        val hit = index.find(code)
+        if (hit == null) { if (noText.size < MAX_MISSES) noText += code; return null }
+        return offset(hit.third, (code - hit.first).toInt()).also { if (unicode.size < MAX_ENTRIES * 2) unicode[code] = it }
     }
 
     fun cid(code: Long): Int? {
         cids[code]?.let { return it }
-        for ((lo, hi, start) in cidRanges) if (code in lo..hi) return start + (code - lo).toInt()
-        return null
+        if (code in noCid) return null
+        val index = cidIndex?.takeIf { it.size == cidRanges.size } ?: Ranges(cidRanges).also { cidIndex = it }
+        val hit = index.find(code)
+        if (hit == null) { if (noCid.size < MAX_MISSES) noCid += code; return null }
+        return hit.third + (code - hit.first).toInt()
+    }
+
+    /**
+     * Ranges sorted by their low code, for a binary search. Where ranges overlap (they
+     * shouldn't), the first one defined among the few nearest wins, as in a straight scan.
+     */
+    private class Ranges<T>(list: List<Triple<Long, Long, T>>) {
+        val size = list.size
+        private val sorted = list.withIndex().sortedBy { it.value.first }
+        private val lows = LongArray(sorted.size) { sorted[it].value.first }
+
+        fun find(code: Long): Triple<Long, Long, T>? {
+            // The last range starting at or below the code, and a few before it.
+            var lo = 0; var hi = lows.size - 1; var at = -1
+            while (lo <= hi) { val mid = (lo + hi) ushr 1; if (lows[mid] <= code) { at = mid; lo = mid + 1 } else hi = mid - 1 }
+            var best: IndexedValue<Triple<Long, Long, T>>? = null
+            var k = at
+            while (k >= 0 && k > at - 16) {
+                val r = sorted[k]
+                if (code <= r.value.second && (best == null || r.index < best.index)) best = r
+                k--
+            }
+            return best?.value
+        }
     }
 
     /** [start] with its last character advanced by [k] (a bfrange's later codes). */
@@ -64,6 +101,9 @@ internal class PdfCMap {
 
     companion object {
         private const val MAX_ENTRIES = 200_000
+        /** Codespace ranges a CMap may have (real ones have a handful). */
+        private const val MAX_SPACES = 256
+        private const val MAX_MISSES = 65_536
 
         fun parse(data: ByteArray, into: PdfCMap = PdfCMap(), resolveUse: ((String) -> PdfCMap?)? = null): PdfCMap {
             val lex = PdfLexer(ByteBuffer.wrap(data))
@@ -85,8 +125,8 @@ internal class PdfCMap {
                         var k = 0
                         while (k + 1 < stack.size) {
                             val lo = hexBytes(stack[k]); val hi = hexBytes(stack[k + 1])
-                            if (lo != null && hi != null && lo.size in 1..4) into.spaces += Triple(lo.size, code(lo), code(hi))
-                            k += 2
+                            if (lo != null && hi != null && lo.size in 1..4 && into.spaces.size < MAX_SPACES) into.spaces += Triple(lo.size, code(lo), code(hi))
+                            k += 2; count++
                         }
                         stack.clear()
                     }
@@ -167,7 +207,7 @@ internal class PdfCMap {
     }
 
     private fun inherit(o: PdfCMap) {
-        spaces += o.spaces; unicodeRanges += o.unicodeRanges; cidRanges += o.cidRanges
+        spaces += o.spaces.take((MAX_SPACES - spaces.size).coerceAtLeast(0)); unicodeRanges += o.unicodeRanges; cidRanges += o.cidRanges
         for ((k, v) in o.unicode) unicode.putIfAbsent(k, v)
         for ((k, v) in o.cids) cids.putIfAbsent(k, v)
     }

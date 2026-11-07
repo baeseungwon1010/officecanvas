@@ -45,10 +45,12 @@ internal class PdfFont private constructor(
     }
 
     /** The glyphs of a shown string; [width] in text space units (before font size). */
-    fun glyphs(bytes: ByteArray): List<Glyph> {
-        val out = ArrayList<Glyph>(bytes.size)
+    /** The glyphs [bytes] show, at most [limit] of them. */
+    fun glyphs(bytes: ByteArray, limit: Int = Int.MAX_VALUE): List<Glyph> {
+        val out = ArrayList<Glyph>(minOf(bytes.size, limit.coerceAtLeast(0)))
         if (!cid) {
             for (b in bytes) {
+                if (out.size >= limit) break
                 val c = (b.toInt() and 0xFF).toLong()
                 val t = toUnicode?.text(c)?.takeIf { usable(it) } ?: simpleText?.getOrNull(c.toInt()) ?: ""
                 out += Glyph(c, unPrivate(t), widths(c, c.toInt()) * scale, c == 32L)
@@ -56,7 +58,7 @@ internal class PdfFont private constructor(
             return out
         }
         val cmap = codeMap ?: PdfCMap.identity()
-        cmap.codes(bytes, 2) { code, len ->
+        cmap.codes(bytes, 2, limit) { code, len ->
             val cidValue = cmap.cid(code) ?: code.toInt()
             val t = toUnicode?.text(code)?.takeIf { usable(it) }
                 ?: charset?.let { cs -> decodeCode(code, len, cs) }
@@ -450,6 +452,9 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
                 tables[tag] = b.getInt(at + 8) to b.getInt(at + 12)
             }
             val cmaps = ArrayList<Pair<Int, Map<Int, Int>>>()
+            // Codes looked at, over all the subtables (a table can repeat a range, or its records point at one subtable many times).
+            val budget = intArrayOf(MAX_CMAP_CODES)
+            val parsed = HashMap<Int, Map<Int, Int>?>()
             tables["cmap"]?.let { (off, len) ->
                 if (off < 0 || off + 4 > data.size) return@let
                 val n = b.getShort(off + 2).toInt() and 0xFFFF
@@ -465,7 +470,7 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
                         platform == 1 && encoding == 0 -> MAC
                         else -> continue
                     }
-                    subtable(b, sub, data.size)?.let { cmaps += kind to it }
+                    parsed.getOrPut(sub) { subtable(b, sub, data.size, budget) }?.let { cmaps += kind to it }
                 }
             }
             val names = ArrayList<String?>()
@@ -473,7 +478,7 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
             return TrueTypeTables(cmaps, names)
         }
 
-        private fun subtable(b: ByteBuffer, at: Int, size: Int): Map<Int, Int>? {
+        private fun subtable(b: ByteBuffer, at: Int, size: Int, budget: IntArray): Map<Int, Int>? {
             if (at < 0 || at + 6 > size) return null
             val out = HashMap<Int, Int>()
             when (b.getShort(at).toInt() and 0xFFFF) {
@@ -488,6 +493,8 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
                         val delta = b.getShort(deltas + s * 2).toInt()
                         val rangeOff = b.getShort(ranges + s * 2).toInt() and 0xFFFF
                         if (start > end || end - start > 20000) continue
+                        budget[0] -= end - start + 1
+                        if (budget[0] < 0) break
                         for (c in start..end) {
                             if (c == 0xFFFF) break
                             val gid = if (rangeOff == 0) (c + delta) and 0xFFFF else {
@@ -502,7 +509,8 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
                 6 -> {
                     val first = b.getShort(at + 6).toInt() and 0xFFFF
                     val count = b.getShort(at + 8).toInt() and 0xFFFF
-                    for (i in 0 until count) { val p = at + 10 + i * 2; if (p + 2 > size) break; out[first + i] = b.getShort(p).toInt() and 0xFFFF }
+                    budget[0] -= count
+                    if (budget[0] >= 0) for (i in 0 until count) { val p = at + 10 + i * 2; if (p + 2 > size) break; out[first + i] = b.getShort(p).toInt() and 0xFFFF }
                 }
                 12 -> {
                     val groups = b.getInt(at + 12)
@@ -511,6 +519,8 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
                         if (p + 12 > size) break
                         val s = b.getInt(p); val e = b.getInt(p + 4); val gid = b.getInt(p + 8)
                         if (e < s || e - s > 100_000) continue
+                        budget[0] -= e - s + 1
+                        if (budget[0] < 0) break
                         for (c in s..e) out[c] = gid + (c - s)
                         if (out.size > 200_000) break
                     }
@@ -519,6 +529,9 @@ internal class TrueTypeTables private constructor(private val cmaps: List<Pair<I
             }
             return out
         }
+
+        /** Codes a font's cmap subtables may map, all told: more than any font has (Unicode is 1.1 million, most fonts a few thousand). */
+        private const val MAX_CMAP_CODES = 1_200_000
 
         private fun postNames(b: ByteBuffer, off: Int, size: Int, out: MutableList<String?>) {
             if (off + 34 > size) return
