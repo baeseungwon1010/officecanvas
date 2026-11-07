@@ -58,6 +58,31 @@ internal object PdfImages {
         }
     } catch (e: Exception) { null } catch (e: LinkageError) { null } catch (e: OutOfMemoryError) { null }
 
+    /** A JPEG decoded, its soft mask applied as alpha, as PNG; null where Android's decoder isn't there or fails. */
+    private fun maskedJpeg(doc: PdfDocument, data: ByteArray, smask: PdfStream): Image? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+        var sample = 1
+        while (bounds.outWidth.toLong() * bounds.outHeight / (sample.toLong() * sample) > MAX_RGB_PIXELS) sample *= 2
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        if (bmp == null) null else try {
+            val bw = bmp.width; val bh = bmp.height
+            val alpha = softMask(doc, smask, bw, bh)
+            if (alpha == null) null else {
+                val px = IntArray(bw * bh)
+                bmp.getPixels(px, 0, bw, 0, 0, bw, bh)
+                val rgba = ByteArray(bw * bh * 4)
+                for (i in px.indices) {
+                    val c = px[i]
+                    rgba[i * 4] = (c shr 16).toByte(); rgba[i * 4 + 1] = (c shr 8).toByte(); rgba[i * 4 + 2] = c.toByte(); rgba[i * 4 + 3] = alpha[i]
+                }
+                Image(png(rgba, bw, bh, true), true, bw, bh)
+            }
+        } finally {
+            bmp.recycle()
+        }
+    } catch (e: Exception) { null } catch (e: LinkageError) { null } catch (e: OutOfMemoryError) { null }
+
     /** How many color components a color space has. */
     fun colorComponents(doc: PdfDocument, cs: PdfObj?): Int? = when (val c = doc.resolve(cs)) {
         is PdfName -> when (c.name) { "DeviceGray", "CalGray", "G" -> 1; "DeviceRGB", "CalRGB", "RGB", "Lab" -> 3; "DeviceCMYK", "CMYK" -> 4; else -> null }
@@ -84,7 +109,10 @@ internal object PdfImages {
         if (codec == "DCTDecode") {
             if (w.toLong() * h > MAX_JPEG_PIXELS) return null
             val inverted = doc.array(d["Decode"])?.items?.map { doc.num(it) }?.let { it.size == 8 && (0 until 4).all { k -> it[2 * k] == 1.0 && it[2 * k + 1] == 0.0 } } == true
-            if (inverted && colorComponents(doc, d["ColorSpace"]) == 4) rgbJpeg(data)?.let { return it }
+            val cmyk = colorComponents(doc, d["ColorSpace"]) == 4
+            // With a soft mask, the mask is applied (where it's clear the picture is, not black).
+            if (smask != null && (!cmyk || inverted)) maskedJpeg(doc, data, smask)?.let { return it }
+            if (inverted && cmyk) rgbJpeg(data)?.let { return it }
             return Image(data, false, w, h)
         }
         if (w.toLong() * h > MAX_PIXELS) return null
