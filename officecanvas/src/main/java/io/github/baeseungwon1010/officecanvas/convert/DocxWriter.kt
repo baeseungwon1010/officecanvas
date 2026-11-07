@@ -43,17 +43,21 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
         var broke = first || prev != null && !sameSetup(prev, page)
         // Floating pictures anchor in the page's first paragraph.
         var anchors = page.floating.joinToString("") { anchor(it) }
-        if (page.blocks.isEmpty() || page.blocks.first() !is ConvParagraph) {
+        // Space before a page's first paragraph is dropped at the top of a page (LibreOffice drops it;
+        // a picture floating above would have the text run over it), so a paragraph that tall holds it.
+        val head = page.blocks.firstOrNull()
+        val lead = (head as? ConvParagraph)?.spaceBefore?.takeIf { it > 2 }
+        if (head !is ConvParagraph || lead != null) {
             body.append("<w:p><w:pPr>")
             if (!broke) body.append("<w:pageBreakBefore/>")
-            body.append("<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/></w:rPr></w:pPr>")
+            body.append("<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"${tw((lead ?: 1.0).coerceIn(1.0, 1500.0))}\" w:lineRule=\"exact\"/><w:rPr><w:sz w:val=\"2\"/></w:rPr></w:pPr>")
             body.append(anchors).append("</w:p>")
             anchors = ""
             broke = true
         }
-        for (b in page.blocks) {
+        for ((k, b) in page.blocks.withIndex()) {
             when (b) {
-                is ConvParagraph -> { paragraph(b, pageBreak = !broke, extra = anchors); anchors = ""; broke = true }
+                is ConvParagraph -> { paragraph(if (k == 0 && lead != null) b.withSpaceBefore(0.0) else b, pageBreak = !broke, extra = anchors); anchors = ""; broke = true }
                 is ConvTable -> { spacer(b.spaceBefore); table(b) }
             }
         }

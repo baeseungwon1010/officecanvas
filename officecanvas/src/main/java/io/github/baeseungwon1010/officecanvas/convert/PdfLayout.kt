@@ -237,9 +237,6 @@ internal object PdfLayout {
         return ConvParagraph(runs.filter { it.text.isNotEmpty() }, p.align, p.leftIndent, p.rightIndent, p.firstLine, 0.0, p.lineHeight, null, p.tabs, rightTabs = p.rightTabs)
     }
 
-    private fun ConvParagraph.withSpaceBefore(v: Double) =
-        ConvParagraph(runs, align, leftIndent, rightIndent, firstLine, v, lineHeight, image, tabs, shading, rightTabs)
-
     /** Filled rectangles outside the tables, which may lie behind paragraphs. */
     private fun freeFills(content: PdfPageContent, tables: List<TableGrid>) = content.rects.filter { r ->
         !isWhite(r.color) && r.w > 6 && r.h > 4 && r.w * r.h < content.width * content.height * 0.5 &&

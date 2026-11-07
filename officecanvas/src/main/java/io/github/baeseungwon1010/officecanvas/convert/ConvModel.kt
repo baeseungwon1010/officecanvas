@@ -43,6 +43,8 @@ internal class ConvParagraph(
     val rightTabs: List<Double> = emptyList()
 ) : ConvBlock() {
     val text: String get() = runs.joinToString("") { it.text }
+
+    fun withSpaceBefore(v: Double) = ConvParagraph(runs, align, leftIndent, rightIndent, firstLine, v, lineHeight, image, tabs, shading, rightTabs)
 }
 
 internal class ConvRun(
