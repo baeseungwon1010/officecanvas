@@ -439,7 +439,7 @@ internal object PdfLayout {
         fun flush() {
             style?.let { s ->
                 val fit = if (faceWidth > 0) pdfWidth / faceWidth else 1.0
-                val r = if (s.font in STANDARD && faceWidth > 0 && fit in 0.6..1.4) ConvRun(s.text, s.font, s.size, s.bold, s.italic, s.underline, s.color, s.script, s.field, s.spacing, Math.round(fit * 100).toInt(), s.mono, s.serif) else s
+                val r = if ((s.font in STANDARD || s.font in FULL_EM) && faceWidth > 0 && fit in 0.6..1.4) ConvRun(s.text, s.font, s.size, s.bold, s.italic, s.underline, s.color, s.script, s.field, s.spacing, Math.round(fit * 100).toInt(), s.mono, s.serif) else s
                 if (sb.isNotEmpty()) out += r.copyText(sb.toString())
             }
             sb.clear(); pdfWidth = 0.0; faceWidth = 0.0
@@ -468,7 +468,11 @@ internal object PdfLayout {
                 flush(); style = s
             }
             sb.append(c.text)
-            if (c.substitute != null) StandardWidths.width(c.substitute!!, c.font.bold, c.font.italic, c.text)?.let { faceWidth += it * size / 1000; pdfWidth += c.glyphWidth }
+            when (val sub = c.substitute) {
+                null -> {}
+                in FULL_EM -> if (c.text.length == 1 && isCjk(c.text[0])) { faceWidth += size; pdfWidth += c.glyphWidth }
+                else -> StandardWidths.width(sub, c.font.bold, c.font.italic, c.text)?.let { faceWidth += it * size / 1000; pdfWidth += c.glyphWidth }
+            }
             prev = c
         }
         flush()
@@ -496,15 +500,24 @@ internal object PdfLayout {
         // A font readers seldom have, setting no CJK text here, is set in the standard face like it.
         val cjk = HashSet<PdfFont>()
         for (l in lines) for (c in l.chars) if (c.text.any { it in '\u1100'..'\u11FF' || it in '\u2E80'..'\u9FFF' || it in '\uAC00'..'\uD7AF' || it in '\uF900'..'\uFAFF' || it in '\uFF00'..'\uFFEF' }) cjk += c.font
+        // One setting Korean (or other CJK) text that readers seldom have, or that has no name (Type 3),
+        // is set in Windows' own: their Hangul is a full em wide, so it's fitted the same way.
         val standard = IdentityHashMap<PdfFont, String?>()
         for (l in lines) for (c in l.chars) c.substitute = standard.getOrPut(c.font) {
             val f = c.font
-            if (f.family.isEmpty() || f in cjk || PdfFont.installed(f.family) || f.family in STANDARD) null
-            else if (f.monospace) "Courier New" else if (f.serif) "Times New Roman" else "Arial"
+            when {
+                f in cjk -> if (f.family.isNotEmpty() && PdfFont.installed(f.family)) null else if (f.monospace) "굴림체" else if (f.serif) "바탕" else "맑은 고딕"
+                f.family.isEmpty() || PdfFont.installed(f.family) || f.family in STANDARD -> null
+                else -> if (f.monospace) "Courier New" else if (f.serif) "Times New Roman" else "Arial"
+            }
         }
     }
 
     private val STANDARD = setOf("Arial", "Times New Roman", "Courier New")
+    /** Windows' Korean faces, every Hangul syllable and Han character a full em wide. */
+    private val FULL_EM = setOf("맑은 고딕", "바탕", "굴림체")
+
+    private fun isCjk(ch: Char) = ch in '\u1100'..'\u11FF' || ch in '\u2E80'..'\u9FFF' || ch in '\uAC00'..'\uD7AF' || ch in '\uF900'..'\uFAFF'
 
     // ---- blocks and reading order ----------------------------------------------
 
