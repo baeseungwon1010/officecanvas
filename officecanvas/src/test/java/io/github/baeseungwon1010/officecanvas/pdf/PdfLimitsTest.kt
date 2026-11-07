@@ -96,7 +96,7 @@ class PdfLimitsTest {
     fun `fax data coding a whole row a bit decodes to no more rows than allowed`() {
         // Group 4: each 1 bit is a row the same as the one above. 8 KB of them would be 65 536 rows of 8 KB.
         val rows = CcittFax.decode(ByteArray(8192) { -1 }, -1, 65536, 0, blackIs1 = false, byteAlign = false)
-        assertTrue("${rows?.size}", rows == null || rows.size <= 64 shl 20)
+        assertTrue("${rows?.size}", rows == null || rows.size <= 16 shl 20)
         // In a picture, as many rows as the picture has, however many the fax data says.
         val image = stream("/Type /XObject /Subtype /Image /Width 100 /Height 10 /BitsPerComponent 1 /ColorSpace /DeviceGray " +
             "/Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 100 /Rows 400000000 >>", ByteArray(8192) { -1 })
