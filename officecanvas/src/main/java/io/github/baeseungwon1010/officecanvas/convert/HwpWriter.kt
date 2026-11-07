@@ -27,6 +27,7 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
     private var footerBottom = 0.0
     private var instance = 0x12340000
     private val pictures = ArrayList<Pair<String, ByteArray>>() // extension, data
+    private val binIds = HashMap<String, Int>()
 
     private val fonts = LinkedHashMap<String, Int>()
     private val charShapes = LinkedHashMap<String, Int>()
@@ -256,8 +257,11 @@ internal class HwpWriter(private val out: OutputStream, private val defaultFont:
     // ---- pictures ---------------------------------------------------------------
 
     private fun picture(r: Records, level: Int, img: ConvImage, floating: Boolean) {
-        pictures += (if (img.png) "png" else "jpg") to img.data
-        val binId = pictures.size
+        // A picture placed again refers to the one stored.
+        val binId = binIds.getOrPut(img.key) {
+            pictures += (if (img.png) "png" else "jpg") to img.data
+            pictures.size
+        }
         val w = hu(img.width); val h = hu(img.height)
         r.add(CTRL_HEADER, level, if (floating) common("gso ", FLOAT_PICTURE_FLAGS, hu(img.y).coerceAtLeast(0), hu(img.x).coerceAtLeast(0), w, h) else common("gso ", PICTURE_FLAGS, 0, 0, w, h))
         val sc = Bytes()

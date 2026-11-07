@@ -21,6 +21,8 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     private var pageIndex = 0
     private var section: ConvPage? = null
     private val types = HashSet<String>()
+    /** Pictures written so far, by [ConvImage.key]: their relationship ids. */
+    private val stored = HashMap<String, String>()
     /** Fonts the runs use: fixed pitch, serif. */
     private val fontKinds = LinkedHashMap<String, Pair<Boolean, Boolean>>()
     /** The header and footer (from the first page with them), and their distances from the page's edges. */
@@ -271,6 +273,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
     // ---- pictures ----
 
     private fun media(img: ConvImage): String {
+        stored[img.key]?.let { return it }
         images++
         val ext = if (img.png) "png" else "jpg"
         types += ext
@@ -280,6 +283,7 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
         zip.closeEntry()
         val id = "rIdImg$images"
         rels.append("<Relationship Id=\"$id\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"$name\"/>")
+        stored[img.key] = id
         return id
     }
 

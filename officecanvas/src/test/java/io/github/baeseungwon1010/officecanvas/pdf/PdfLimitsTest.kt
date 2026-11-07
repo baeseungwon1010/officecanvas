@@ -1,5 +1,9 @@
 package io.github.baeseungwon1010.officecanvas.pdf
 
+import io.github.baeseungwon1010.officecanvas.ConvertFormat
+import io.github.baeseungwon1010.officecanvas.PdfConverter
+import io.github.baeseungwon1010.officecanvas.ole.Ole2Reader
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -102,5 +106,25 @@ class PdfLimitsTest {
             val img = PdfPageReader(doc).read(doc.pages[0]).pictures.single().image()
             assertTrue(img == null || img.width == 100 && img.height == 10)
         } finally { doc.close() }
+    }
+
+    @Test
+    fun `a picture placed many times is stored once`() {
+        val hex = (0 until 64 * 64).joinToString("") { "%02X".format((it * 37) and 0xFF) }
+        val image = stream("/Type /XObject /Subtype /Image /Width 64 /Height 64 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /ASCIIHexDecode", obj(hex + ">"))
+        val content = (0 until 100).joinToString(" ") { k -> "q 20 0 0 20 ${40 + k % 10 * 50} ${80 + k / 10 * 60} cm /Im1 Do Q" }
+        val f = page(content, "<< /XObject << /Im1 5 0 R >> >>", listOf(image))
+        for (format in listOf(ConvertFormat.DOCX, ConvertFormat.HWPX)) {
+            val out = File.createTempFile("once", "." + format.name.lowercase()).apply { deleteOnExit() }
+            PdfConverter.convert(f, out, format)
+            val media = java.util.zip.ZipFile(out).use { z -> z.entries().toList().count { it.name.startsWith("word/media/") || it.name.startsWith("BinData/") } }
+            assertEquals(format.name, 1, media)
+        }
+        val hwp = File.createTempFile("once", ".hwp").apply { deleteOnExit() }
+        PdfConverter.convert(f, hwp, ConvertFormat.HWP)
+        Ole2Reader.open(hwp).use { ole ->
+            assertTrue(ole.hasStream("BinData/BIN0001.png"))
+            assertTrue(!ole.hasStream("BinData/BIN0002.png"))
+        }
     }
 }

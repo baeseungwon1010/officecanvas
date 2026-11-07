@@ -19,6 +19,7 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
     private var pageIndex = 0
     private var images = 0
     private val imageItems = StringBuilder()
+    private val binNames = HashMap<String, String>()
     private var objectId = 1000
     private var header: List<ConvParagraph>? = null
     private var footer: List<ConvParagraph>? = null
@@ -208,11 +209,15 @@ internal class HwpxWriter(out: OutputStream, private val defaultFont: String) : 
     // ---- pictures ----
 
     private fun picture(img: ConvImage, floating: Boolean): String {
-        images++
-        val ext = if (img.png) "png" else "jpg"
-        val name = "image$images"
-        stored("BinData/$name.$ext", img.data)
-        imageItems.append("<opf:item id=\"$name\" href=\"BinData/$name.$ext\" media-type=\"image/${if (img.png) "png" else "jpg"}\" isEmbeded=\"1\"/>")
+        // A picture placed again refers to the one stored.
+        val name = binNames.getOrPut(img.key) {
+            images++
+            val ext = if (img.png) "png" else "jpg"
+            "image$images".also { n ->
+                stored("BinData/$n.$ext", img.data)
+                imageItems.append("<opf:item id=\"$n\" href=\"BinData/$n.$ext\" media-type=\"image/${if (img.png) "png" else "jpg"}\" isEmbeded=\"1\"/>")
+            }
+        }
         val w = hu(img.width); val h = hu(img.height)
         val id = objectId++
         // Off the paper's top or left edge LibreOffice's reader fails on the whole file, even at -1.

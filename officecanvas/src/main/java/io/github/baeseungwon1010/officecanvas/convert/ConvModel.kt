@@ -100,4 +100,10 @@ internal class ConvImage(
     val x: Double, val y: Double,
     /** Floats where it was, taking no room in the flow: text set as a picture, a logo on every page. */
     val floats: Boolean = false
-)
+) {
+    /** What the picture is (its kind and a digest of its bytes): one placed many times is stored once. */
+    val key: String by lazy {
+        val d = java.security.MessageDigest.getInstance("SHA-256").digest(data)
+        (if (png) "p" else "j") + d.joinToString("") { "%02x".format(it) }
+    }
+}
