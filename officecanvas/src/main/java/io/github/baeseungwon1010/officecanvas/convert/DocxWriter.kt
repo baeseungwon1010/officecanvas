@@ -294,10 +294,13 @@ internal class DocxWriter(out: OutputStream, private val defaultFont: String) : 
             "<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a=\"$A\" noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>${graphic(img, id, n)}</wp:inline></w:drawing>"
     }
 
-    /** A picture behind the text at its place on the page. */
+    /**
+     * A picture behind the text at its place on the page, over the ones before it. (Stacked from
+     * where Word starts: LibreOffice puts one of relativeHeight 1 over the rest.)
+     */
     private fun anchor(img: ConvImage): String {
         val id = media(img); val n = drawingId++
-        return "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"$n\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">" +
+        return "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"${251658240 + n}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">" +
             "<wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>${emu(img.x)}</wp:posOffset></wp:positionH>" +
             "<wp:positionV relativeFrom=\"page\"><wp:posOffset>${emu(img.y)}</wp:posOffset></wp:positionV><wp:extent cx=\"${emu(img.width)}\" cy=\"${emu(img.height)}\"/>" +
             "<wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/><wp:docPr id=\"$n\" name=\"Picture $n\"/><wp:cNvGraphicFramePr/>${graphic(img, id, n)}</wp:anchor></w:drawing></w:r>"
