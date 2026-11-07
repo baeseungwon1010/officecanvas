@@ -7,7 +7,7 @@ import java.util.zip.Deflater
 /**
  * Pictures (8.9) as files a word processor takes: JPEG data as it is, samples
  * (any bit depth, gray, RGB, CMYK, indexed, with a soft mask or as a stencil mask)
- * encoded as PNG. JPEG 2000, CCITT and JBIG2 data aren't decoded.
+ * encoded as PNG, fax (CCITT) data decoded first. JPEG 2000 and JBIG2 data aren't decoded.
  */
 internal object PdfImages {
 
@@ -20,7 +20,7 @@ internal object PdfImages {
 
     fun decode(doc: PdfDocument, s: PdfStream, fill: Int): Image? = try {
         val dec = doc.decode(s) ?: null
-        dec?.let { build(doc, s.dict, it.bytes, it.imageCodec, null, fill, doc.resolve(s.dict["SMask"]) as? PdfStream) }
+        dec?.let { build(doc, s.dict, it.bytes, it.imageCodec, it.codecParms, fill, doc.resolve(s.dict["SMask"]) as? PdfStream) }
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
     fun decodeInline(doc: PdfDocument, dict: PdfDict, raw: ByteArray, resources: PdfDict?, fill: Int): Image? = try {
@@ -37,7 +37,7 @@ internal object PdfImages {
             full["ColorSpace"] = when (name) { "G" -> PdfName("DeviceGray"); "RGB" -> PdfName("DeviceRGB"); "CMYK" -> PdfName("DeviceCMYK"); "I" -> PdfName("Indexed")
                 else -> doc.dict(resources?.get("ColorSpace"))?.get(name) ?: PdfName(name) }
         }
-        build(doc, PdfDict(full), dec.bytes, dec.imageCodec, null, fill, null)
+        build(doc, PdfDict(full), dec.bytes, dec.imageCodec, dec.codecParms, fill, null)
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
     /** Pixels a CMYK JPEG is decoded to at most (halving it until it fits): six megapixels, 24 MB. */
@@ -99,7 +99,8 @@ internal object PdfImages {
         else -> null
     }
 
-    private fun build(doc: PdfDocument, d: PdfDict, data: ByteArray, codec: String?, unused: Any?, fill: Int, smask: PdfStream?): Image? {
+    private fun build(doc: PdfDocument, d: PdfDict, raw: ByteArray, codec: String?, parms: PdfDict?, fill: Int, smask: PdfStream?): Image? {
+        var data = raw
         val w = (doc.num(d["Width"]) ?: return null).toInt()
         val h = (doc.num(d["Height"]) ?: return null).toInt()
         if (w <= 0 || h <= 0) return null
@@ -116,9 +117,14 @@ internal object PdfImages {
             return Image(data, false, w, h)
         }
         if (w.toLong() * h > MAX_PIXELS) return null
-        if (codec != null) return null
+        // Fax data (scans): decoded to the one bit a pixel it stands for.
+        if (codec == "CCITTFaxDecode") {
+            fun int(k: String, default: Int) = doc.num(parms?.get(k))?.toInt() ?: default
+            fun bool(k: String) = (doc.resolve(parms?.get(k)) as? PdfBool)?.value == true
+            data = CcittFax.decode(raw, int("K", 0), int("Columns", w), int("Rows", h), bool("BlackIs1"), bool("EncodedByteAlign")) ?: return null
+        } else if (codec != null) return null
         val mask = (doc.resolve(d["ImageMask"]) as? PdfBool)?.value == true
-        val bpc = if (mask) 1 else (doc.num(d["BitsPerComponent"])?.toInt() ?: 8).coerceIn(1, 16)
+        val bpc = if (mask || codec == "CCITTFaxDecode") 1 else (doc.num(d["BitsPerComponent"])?.toInt() ?: 8).coerceIn(1, 16)
         val decode = doc.array(d["Decode"])?.items?.map { doc.num(it) ?: 0.0 }
         if (mask) {
             // A stencil: the fill color where the sample is 0 (or 1 with Decode [1 0]).
