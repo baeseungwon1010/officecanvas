@@ -92,7 +92,10 @@ internal object PdfLayout {
         val w = content.width; val h = content.height
         // Text a viewer would show (or, on a scanned page, the invisible text over the scan).
         val visible = content.chars.filter { !it.invisible }
-        val ocr = visible.count { it.text.isNotBlank() } < 10 && content.chars.count { it.invisible && it.text.isNotBlank() } > 20
+        // (Unless that text is mostly blanks or private-use codes, glyphs it couldn't name: then the page is its picture.)
+        val hidden = content.chars.filter { it.invisible }
+        val named = hidden.count { c -> c.text.isNotBlank() && c.text.none { it == '\uFFFD' || it in '\uE000'..'\uF8FF' } }
+        val ocr = visible.count { it.text.isNotBlank() } < 10 && named > 20 && named * 2 > hidden.size
         val chars = (if (ocr) content.chars else visible).filter { c ->
             c.text.isNotEmpty() && c.x > -c.size && c.x < w + c.size && c.y > -c.size && c.y < h + c.size * 2
         }

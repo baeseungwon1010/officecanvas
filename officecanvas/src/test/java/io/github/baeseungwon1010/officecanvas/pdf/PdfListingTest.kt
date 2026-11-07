@@ -56,4 +56,28 @@ class PdfListingTest {
         assertTrue(fonts, fonts.contains("<w:font w:name=\"Courier New\"><w:family w:val=\"modern\"/><w:pitch w:val=\"fixed\"/>"))
         assertTrue(fonts, fonts.contains("<w:font w:name=\"Arial\"><w:family w:val=\"swiss\"/><w:pitch w:val=\"variable\"/>"))
     }
+
+    /** A page of invisible text (a scan's recognized text, Tr 3) mapped to [unicode] for codes 1 and 2. */
+    private fun invisible(unicode: String): File {
+        val tounicode = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange " +
+            "2 beginbfchar <01> <${unicode.substring(0, 4)}> <02> <${unicode.substring(4, 8)}> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+        val glyph = "500 0 0 0 400 600 d1 0 0 m 400 0 l 400 600 l 0 600 l f"
+        val font = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 500 600] /FontMatrix [0.001 0 0 0.001 0 0] " +
+            "/CharProcs << /g1 7 0 R /g2 8 0 R >> /Encoding << /Type /Encoding /Differences [1 /g1 /g2] >> " +
+            "/FirstChar 1 /LastChar 2 /Widths [500 500] /Resources << >> /ToUnicode 6 0 R >>"
+        val stream = { body: String -> "<< /Length ${body.length} >>\nstream\n$body\nendstream" }
+        val text = StringBuilder("BT 3 Tr /F1 12 Tf 72 700 Td 14 TL\n")
+        repeat(6) { text.append("(" + "\\001\\002".repeat(10) + ") '\n") }
+        text.append("ET")
+        return TestPdf.page(text.toString(), mapOf("F1" to font), listOf(stream(tounicode), stream(glyph), stream(glyph)))
+    }
+
+    @Test
+    fun `a scan's recognized text is kept, a layer of codes it couldn't name isn't`() {
+        val good = docx(invisible("AC00B098")).getValue("word/document.xml")
+        assertTrue(good, "가나가나" in good)
+        // Private-use codes: glyphs with no characters behind them.
+        val bad = docx(invisible("E001E002")).getValue("word/document.xml")
+        assertTrue(bad, "\uE001" !in bad && "<w:t" !in bad)
+    }
 }
