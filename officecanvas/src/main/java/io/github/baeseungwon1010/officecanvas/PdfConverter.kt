@@ -144,7 +144,9 @@ object PdfConverter {
                     for ((i, p) in pages.withIndex()) {
                         val c = reader.read(p)
                         val pictures = c.pictures.mapNotNull { pic ->
-                            pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || PdfLayout.placeKey(pic) in decorations) }
+                            // (Drawings float where they were: in the flow, a decoration or a box drawn round
+                            // text would push the text along.)
+                            pic.image()?.let { ConvImage(it.data, it.png, it.width, it.height, pic.w, pic.h, pic.x, pic.y, it.text || pic.drawing || PdfLayout.placeKey(pic) in decorations) }
                         }
                         var page = PdfLayout.page(c, pictures, shared[sizes[i]], repeated, i + 1)
                         tight[i]?.let { step -> page = PdfFit.tighten(page, step) }

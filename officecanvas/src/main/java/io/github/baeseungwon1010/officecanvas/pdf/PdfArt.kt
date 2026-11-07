@@ -95,7 +95,7 @@ internal object PdfArt {
                 val iw = min(sb[2], x1 + 1) - max(sb[0], x0 - 1); val ih = min(sb[3], y1 + 1) - max(sb[1], y0 - 1)
                 iw > 0 && ih > 0 && iw * ih >= (sb[2] - sb[0]) * (sb[3] - sb[1]) * 0.8
             }
-            out += PdfPicture(x0, y0, w, h) { render(inside, x0, y0, w, h) }
+            out += PdfPicture(x0, y0, w, h, drawing = true) { render(inside, x0, y0, w, h) }
             if (out.size >= 200) break
         }
         return out

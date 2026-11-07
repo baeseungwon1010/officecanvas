@@ -28,7 +28,8 @@ internal class PdfLine(val x0: Double, val y0: Double, val x1: Double, val y1: D
 internal class PdfRect(val x: Double, val y: Double, val w: Double, val h: Double, val color: Int)
 
 /** A picture placed on the page; [image] decodes it when asked. */
-internal class PdfPicture(val x: Double, val y: Double, val w: Double, val h: Double, val image: () -> PdfImages.Image?)
+/** A picture where the page draws it; [drawing]: one of the page's drawings, drawn as a picture (see [PdfArt]). */
+internal class PdfPicture(val x: Double, val y: Double, val w: Double, val h: Double, val drawing: Boolean = false, val image: () -> PdfImages.Image?)
 
 internal class PdfPageContent(
     val width: Double, val height: Double,
