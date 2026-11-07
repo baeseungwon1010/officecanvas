@@ -66,6 +66,31 @@ class PdfDrawingTest {
     }
 
     @Test
+    fun `a white panel painted over a picture is drawn over it`() {
+        // A black shadow picture, then a white panel over most of it, as slides draw a card.
+        val hex = "00".repeat(4)
+        val shadow = "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray " +
+            "/Filter /ASCIIHexDecode /Length ${hex.length + 1} >>\nstream\n$hex>\nendstream"
+        val c = "q 220 0 0 120 70 590 cm /Im1 Do Q\n1 1 1 rg 72 600 200 100 re f\n" +
+            "BT /F1 10 Tf 90 650 Td (On the panel.) Tj ET"
+        val out = File.createTempFile("panel", ".docx").apply { deleteOnExit() }
+        PdfConverter.convert(TestPdf.page(c, mapOf("F1" to "Helvetica"), listOf(shadow), xobjects = "/Im1 6 0 R"), out, ConvertFormat.DOCX)
+        ZipFile(out).use { z ->
+            val xml = String(z.getInputStream(z.getEntry("word/document.xml")).readBytes())
+            val rels = String(z.getInputStream(z.getEntry("word/_rels/document.xml.rels")).readBytes())
+            // The pictures by height in the stack, and the drawn panel's: the higher of the two.
+            val stack = Regex("relativeHeight=\"(\\d+)\".*?r:embed=\"(\\w+)\"", RegexOption.DOT_MATCHES_ALL).findAll(xml)
+                .map { it.groupValues[1].toInt() to it.groupValues[2] }.sortedBy { it.first }.toList()
+            assertEquals(xml, 2, stack.size)
+            val target = Regex("Id=\"${stack.last().second}\"[^>]*Target=\"([^\"]+)\"").find(rels)!!.groupValues[1]
+            val png = z.getInputStream(z.getEntry("word/$target")).readBytes()
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+            val px = bmp.getPixel(bmp.width / 2, bmp.height / 2)
+            assertEquals(Integer.toHexString(px), 0xFFFFFFFF.toInt(), px)
+        }
+    }
+
+    @Test
     fun `a slide's text is set where it was, in frames`() {
         // A 16:9 slide: a title, and two labels on either side.
         val c = "BT /F1 28 Tf 60 470 Td (A slide title) Tj ET\n" +

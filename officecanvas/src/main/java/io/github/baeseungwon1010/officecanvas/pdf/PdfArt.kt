@@ -9,12 +9,12 @@ import kotlin.math.sqrt
  * A path painted on the page, in device space (points, y down): subpaths of points,
  * curves as (x, y, c1x, c1y, c2x, c2y), and rectangles (x, y, w, h). [fill] and
  * [stroke] are the colors it was painted with, null where it wasn't; [clip] is the
- * clipping path's box.
+ * clipping path's box; [order], where it comes among the page's shapes and pictures.
  */
 internal class PdfShape(
     val subpaths: List<List<DoubleArray>>, val rects: List<DoubleArray>,
     val fill: Int?, val stroke: Int?, val lineWidth: Double, val evenOdd: Boolean,
-    val clip: DoubleArray?, val fillAlpha: Double, val strokeAlpha: Double
+    val clip: DoubleArray?, val fillAlpha: Double, val strokeAlpha: Double, val order: Int = 0
 ) {
     /** The box it covers, within its clip; null if clipped away. */
     val box: DoubleArray? = run {
@@ -67,8 +67,18 @@ internal object PdfArt {
     private const val MAX_PIXELS = 2_000_000.0
     private const val MAX_SCALE = 3.0
 
-    fun pictures(shapes: List<PdfShape>, pageW: Double, pageH: Double): List<PdfPicture> {
-        val seeds = shapes.filter { s -> s.isArt && s.box != null && !isWhite(s) }
+    /**
+     * The drawings among [shapes], each over the [pictures] painted before it: a group a picture
+     * was painted into the middle of (a panel over a photo's shadow) is drawn as two, under and over it.
+     */
+    fun pictures(shapes: List<PdfShape>, pageW: Double, pageH: Double, pictures: List<PdfPicture> = emptyList()): List<PdfPicture> {
+        // A white fill hides nothing on white paper, but over a picture painted before it, it does.
+        fun overPicture(s: PdfShape): Boolean {
+            val b = s.box ?: return false
+            val area = (b[2] - b[0]) * (b[3] - b[1])
+            return pictures.any { p -> p.order < s.order && overlap(b, p) >= area * 0.5 }
+        }
+        val seeds = shapes.filter { s -> s.isArt && s.box != null && (!isWhite(s) || overPicture(s)) }
         if (seeds.isEmpty() || seeds.size > 20_000) return emptyList()
         // Boxes of seeds within JOIN of each other, merged until none are.
         val boxes = ArrayList<DoubleArray>()
@@ -90,6 +100,7 @@ internal object PdfArt {
                 i++
             }
         }
+        val seedSet = seeds.toHashSet()
         val out = ArrayList<PdfPicture>()
         for (b in boxes) {
             val x0 = max(b[0], 0.0); val y0 = max(b[1], 0.0); val x1 = min(b[2], pageW); val y1 = min(b[3], pageH)
@@ -101,11 +112,24 @@ internal object PdfArt {
                 val iw = min(sb[2], x1 + 1) - max(sb[0], x0 - 1); val ih = min(sb[3], y1 + 1) - max(sb[1], y0 - 1)
                 iw > 0 && ih > 0 && iw * ih >= (sb[2] - sb[0]) * (sb[3] - sb[1]) * 0.8
             }
-            out += PdfPicture(x0, y0, w, h, drawing = true) { render(inside, x0, y0, w, h) }
+            // Split where a picture over the group was painted; a part without a drawing of its own joins the one before.
+            val box = doubleArrayOf(x0, y0, x1, y1)
+            val cuts = pictures.filter { overlap(box, it) > 0 }.map { it.order }.sorted()
+            val parts = ArrayList<MutableList<PdfShape>>()
+            for ((_, part) in inside.groupBy { s -> cuts.count { it < s.order } }.toSortedMap()) {
+                if (parts.isEmpty() || part.any { it in seedSet }) parts += part.toMutableList() else parts.last() += part
+            }
+            if (parts.size > 1 && parts[0].none { it in seedSet }) { parts[1].addAll(0, parts[0]); parts.removeAt(0) }
+            for (part in parts) {
+                out += PdfPicture(x0, y0, w, h, drawing = true, order = part.first().order) { render(part, x0, y0, w, h) }
+            }
             if (out.size >= 200) break
         }
         return out
     }
+
+    private fun overlap(b: DoubleArray, p: PdfPicture): Double =
+        max(0.0, min(b[2], p.x + p.w) - max(b[0], p.x)) * max(0.0, min(b[3], p.y + p.h) - max(b[1], p.y))
 
     private fun isWhite(s: PdfShape): Boolean {
         fun white(c: Int?) = c == null || (c shr 16 and 0xFF) > 250 && (c shr 8 and 0xFF) > 250 && (c and 0xFF) > 250

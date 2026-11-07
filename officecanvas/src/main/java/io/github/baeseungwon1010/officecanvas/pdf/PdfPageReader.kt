@@ -29,7 +29,7 @@ internal class PdfRect(val x: Double, val y: Double, val w: Double, val h: Doubl
 
 /** A picture placed on the page; [image] decodes it when asked. */
 /** A picture where the page draws it; [drawing]: one of the page's drawings, drawn as a picture (see [PdfArt]). */
-internal class PdfPicture(val x: Double, val y: Double, val w: Double, val h: Double, val drawing: Boolean = false, val image: () -> PdfImages.Image?)
+internal class PdfPicture(val x: Double, val y: Double, val w: Double, val h: Double, val drawing: Boolean = false, val order: Int = 0, val image: () -> PdfImages.Image?)
 
 internal class PdfPageContent(
     val width: Double, val height: Double,
@@ -74,6 +74,8 @@ internal class PdfPageReader(private val doc: PdfDocument) {
     private val pictures = ArrayList<PdfPicture>()
     private val shapes = ArrayList<PdfShape>()
     private var ops = 0L
+    /** Shapes and pictures painted so far on the page: their order, the later over the earlier. */
+    private var painted = 0
 
     fun read(page: PdfDocument.Page): PdfPageContent {
         val box = page.cropBox
@@ -87,13 +89,13 @@ internal class PdfPageReader(private val doc: PdfDocument) {
             else -> flip
         }
         val (pw, ph) = if (page.rotate == 90 || page.rotate == 270) h to w else w to h
-        chars.clear(); lines.clear(); rects.clear(); pictures.clear(); shapes.clear(); ops = 0
+        chars.clear(); lines.clear(); rects.clear(); pictures.clear(); shapes.clear(); ops = 0; painted = 0
         val content = contentBytes(page.dict["Contents"])
         if (content != null) run(content, page.resources, State(), 0)
         annotations(page)
-        // Drawings (curves, slanted lines, shapes) as pictures, under the page's own.
-        val art = PdfArt.pictures(shapes.toList(), pw, ph)
-        return PdfPageContent(pw, ph, chars.toList(), lines.toList(), rects.toList(), art + pictures)
+        // Drawings (curves, slanted lines, shapes) as pictures, all in the order they were painted.
+        val art = PdfArt.pictures(shapes.toList(), pw, ph, pictures.toList())
+        return PdfPageContent(pw, ph, chars.toList(), lines.toList(), rects.toList(), (art + pictures).sortedBy { it.order })
     }
 
     /** Annotations' normal appearances (stamps, filled-in form fields, signatures), mapped into their rectangles (12.5.5). */
@@ -202,7 +204,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
             if (shapes.size < MAX_SHAPES && (path.isNotEmpty() || pathRects.isNotEmpty())) {
                 val f = if (fill && gs.fillComponents != 0 && gs.fillAlpha > 0.05) gs.fill else null
                 val st = if (stroke && gs.strokeComponents != 0 && gs.strokeAlpha > 0.05) gs.stroke else null
-                if (f != null || st != null) shapes += PdfShape(path.map { it.toList() }, pathRects.toList(), f, st, lw, evenOdd, gs.clip, gs.fillAlpha, gs.strokeAlpha)
+                if (f != null || st != null) shapes += PdfShape(path.map { it.toList() }, pathRects.toList(), f, st, lw, evenOdd, gs.clip, gs.fillAlpha, gs.strokeAlpha, painted++)
             }
             if (fill) for (r in pathRects) {
                 if (rects.size < MAX_SHAPES) rects += PdfRect(r[0], r[1], r[2], r[3], gs.fill)
@@ -374,7 +376,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         val w = xs.max() - xs.min(); val h = ys.max() - ys.min()
         if (w < 1 || h < 1) return
         val fill = gs.fill
-        pictures += PdfPicture(xs.min(), ys.min(), w, h) { PdfImages.decode(doc, s, fill) }
+        pictures += PdfPicture(xs.min(), ys.min(), w, h, order = painted++) { PdfImages.decode(doc, s, fill) }
     }
 
     /** "BI <dict> ID <data> EI" (8.9.7). */
@@ -406,7 +408,7 @@ internal class PdfPageReader(private val doc: PdfDocument) {
         val w = xs.max() - xs.min(); val h = ys.max() - ys.min()
         if (w < 1 || h < 1) return
         val fill = gs.fill
-        pictures += PdfPicture(xs.min(), ys.min(), w, h) { PdfImages.decodeInline(doc, dict, data, resources, fill) }
+        pictures += PdfPicture(xs.min(), ys.min(), w, h, order = painted++) { PdfImages.decodeInline(doc, dict, data, resources, fill) }
     }
 
     companion object {
